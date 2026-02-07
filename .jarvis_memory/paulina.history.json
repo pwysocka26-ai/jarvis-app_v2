@@ -1,0 +1,35 @@
+{
+  "user_id": "paulina",
+  "messages": [
+    {
+      "role": "user",
+      "content": "Mam na imię Paulina i pracuję nad Jarvisem.",
+      "ts": 1770074714
+    },
+    {
+      "role": "assistant",
+      "content": "Witaj, Paulino! Przykładam się do Twojej pracy nad mną, asystentem offline działającym lokalnie. Jak mogę Ci pomóc dziś? Czy masz jakieś zadania lub pytania dotyczące naszego projektu?",
+      "ts": 1770074714
+    },
+    {
+      "role": "user",
+      "content": "Mam na imię Paulina i pracuję nad Jarvisem.",
+      "ts": 1770075301
+    },
+    {
+      "role": "assistant",
+      "content": "Już wiem! Witaj ponownie, Paulino! Chyba było niepotrzebnie powtarzać tego samego. Co chcesz teraz zrobić? Zaczynać nowe zadanie lub kontynuować prace nad Jarvisem?",
+      "ts": 1770075301
+    },
+    {
+      "role": "user",
+      "content": "Jak mam na imię i nad czym pracuję?",
+      "ts": 1770075341
+    },
+    {
+      "role": "assistant",
+      "content": "Paulino! Masz na imię Paulina, a pracujesz nad Jarvisem - asystentem offline działającym lokalnie.",
+      "ts": 1770075341
+    }
+  ]
+}

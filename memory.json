@@ -1,0 +1,26 @@
+[
+  {
+    "role": "user",
+    "content": "Pracuję nad Jarvisem"
+  },
+  {
+    "role": "assistant",
+    "content": "Jarvis (stub): działam stabilnie."
+  },
+  {
+    "role": "user",
+    "content": "Hej"
+  },
+  {
+    "role": "assistant",
+    "content": "Jarvis (stub): działam stabilnie."
+  },
+  {
+    "role": "user",
+    "content": "Super"
+  },
+  {
+    "role": "assistant",
+    "content": "Jarvis (stub): działam stabilnie."
+  }
+]

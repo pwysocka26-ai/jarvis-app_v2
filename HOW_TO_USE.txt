@@ -1,0 +1,4 @@
+1. Unzip over your Jarvis4 project
+2. Restart backend
+3. Restart CLI
+4. Use /mode b2c or /mode pro
