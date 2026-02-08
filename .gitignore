@@ -62,3 +62,20 @@ htmlcov/
 # ========================
 build/
 dist/
+# Local runtime & data
+jarvis.db
+.jarvis_memory/
+memory.json
+
+# Archives & patches
+_ARCHIVE/
+JARVIS_INTENT_ROUTER_MEMORY_LIST_FIX/
+jarvis_intent_router_memory_fix/
+FIX_*.txt
+README_FIX_*.txt
+README_PATCH_*.txt
+README_*_PATCH.txt
+PATCH_NOTES.md
+tools/patch_*.py
+tools/fix_*.py
+*.bak
