@@ -1,2 +1,0 @@
-{'role': 'user', 'content': 'Ollama list'}
-{'role': 'assistant', 'content': "(fallback:stub) Wystąpił błąd LLM: ReadTimeout: HTTPConnectionPool(host='127.0.0.1', port=11434): Read timed out. (read timeout=20.0)"}
