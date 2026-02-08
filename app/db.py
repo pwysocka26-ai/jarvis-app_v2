@@ -11,6 +11,16 @@ SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 class Base(DeclarativeBase):
     pass
 
+def init_db() -> None:
+    """Create DB tables if they don't exist.
+
+    We keep this lightweight for local/dev usage (especially SQLite).
+    In production you'd typically use migrations instead.
+    """
+    # Ensure models are imported so Base.metadata is populated
+    from . import models  # noqa: F401
+    Base.metadata.create_all(bind=engine)
+
 def get_db():
     db = SessionLocal()
     try:

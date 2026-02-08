@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
@@ -79,14 +78,115 @@ class DBMemoryStore:
         # Not used; facts are upserted per key.
         return
 
-    def remember_fact(self, key: str, value: Any, source: str = "user_explicit", confidence: float = 1.0, importance: int = 80) -> None:
+    # ---------------------------------------------------------------------
+    # Public API expected by app.intent.router (mirrors MemoryStore)
+    # ---------------------------------------------------------------------
+
+    def remember_fact(self, fact: str) -> None:
+        """Remember a single free-form fact.
+
+        The file backend stores free-form facts as a list (items). For the DB
+        backend we store each item as a separate row in UserFact.
+        """
+        fact = (fact or "").strip()
+        if not fact:
+            return
+        self._upsert_fact(key=fact, value=True, source="user_explicit", confidence=1.0, importance=80)
+
+    def forget_fact(self, fact: str) -> None:
+        """Forget a single free-form fact (soft delete)."""
+        fact = (fact or "").strip()
+        if not fact:
+            return
+        self._mark_fact_deleted(key=fact)
+
+    def list_facts(self) -> List[str]:
+        """List remembered free-form facts (excluding KV entries)."""
         db = self._db()
         try:
-            # soft-supersede previous
-            prev = db.scalars(select(UserFact).where(UserFact.user_id == self.user_id, UserFact.key == key, UserFact.status == "active")).first()
+            q = select(UserFact.key).where(
+                UserFact.user_id == self.user_id,
+                UserFact.status == "active",
+            )
+            keys = [k for (k,) in db.execute(q).all()]
+            return [k for k in keys if not str(k).startswith("kv:")]
+        finally:
+            db.close()
+
+    # --------- DANE STRUKTURALNE (KV) ---------
+
+    def set_kv(self, key: str, value: Any) -> None:
+        key = (key or "").strip()
+        if not key:
+            return
+        self._upsert_fact(key=f"kv:{key}", value=value, source="kv", confidence=1.0, importance=90)
+
+    def get_kv(self, key: str, default: Any = None) -> Any:
+        key = (key or "").strip()
+        if not key:
+            return default
+        db = self._db()
+        try:
+            row = db.scalars(
+                select(UserFact).where(
+                    UserFact.user_id == self.user_id,
+                    UserFact.key == f"kv:{key}",
+                    UserFact.status == "active",
+                )
+            ).first()
+            return row.value if row else default
+        finally:
+            db.close()
+
+    def delete_kv(self, key: str) -> None:
+        key = (key or "").strip()
+        if not key:
+            return
+        self._mark_fact_deleted(key=f"kv:{key}")
+
+    def all_kv(self) -> Dict[str, Any]:
+        db = self._db()
+        try:
+            q = select(UserFact).where(
+                UserFact.user_id == self.user_id,
+                UserFact.status == "active",
+            )
+            rows = list(db.scalars(q))
+            out: Dict[str, Any] = {}
+            for r in rows:
+                k = str(r.key)
+                if k.startswith("kv:"):
+                    out[k[3:]] = r.value
+            return out
+        finally:
+            db.close()
+
+    # ---------------------------------------------------------------------
+    # Internal helpers
+    # ---------------------------------------------------------------------
+
+    def _upsert_fact(
+        self,
+        *,
+        key: str,
+        value: Any,
+        source: str = "user_explicit",
+        confidence: float = 1.0,
+        importance: int = 80,
+    ) -> None:
+        db = self._db()
+        try:
+            prev = db.scalars(
+                select(UserFact).where(
+                    UserFact.user_id == self.user_id,
+                    UserFact.key == key,
+                    UserFact.status == "active",
+                )
+            ).first()
             if prev:
                 prev.status = "superseded"
                 prev.updated_at = datetime.utcnow()
+
             db.add(
                 UserFact(
                     user_id=self.user_id,
@@ -102,10 +202,16 @@ class DBMemoryStore:
         finally:
             db.close()
 
-    def forget_fact(self, key: str) -> bool:
+    def _mark_fact_deleted(self, *, key: str) -> bool:
         db = self._db()
         try:
-            row = db.scalars(select(UserFact).where(UserFact.user_id == self.user_id, UserFact.key == key, UserFact.status == "active")).first()
+            row = db.scalars(
+                select(UserFact).where(
+                    UserFact.user_id == self.user_id,
+                    UserFact.key == key,
+                    UserFact.status == "active",
+                )
+            ).first()
             if not row:
                 return False
             row.status = "deleted"
