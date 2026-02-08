@@ -1,0 +1,25 @@
+services:
+  db:
+    image: postgres:16
+    container_name: jarvis_db
+    environment:
+      POSTGRES_USER: jarvis
+      POSTGRES_PASSWORD: jarvis
+      POSTGRES_DB: jarvis
+    ports:
+      - "5432:5432"
+    volumes:
+      - jarvis_pgdata:/var/lib/postgresql/data
+
+  redis:
+    image: redis:7
+    container_name: jarvis_redis
+    ports:
+      - "6379:6379"
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - jarvis_redisdata:/data
+
+volumes:
+  jarvis_pgdata:
+  jarvis_redisdata:

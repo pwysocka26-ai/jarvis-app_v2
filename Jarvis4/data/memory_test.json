@@ -1,0 +1,13 @@
+{
+  "items": [],
+  "kv": {
+    "profile": {
+      "city": "Warszawa",
+      "job": "PM"
+    },
+    "goal": "Zbudować Jarvisa B2C",
+    "goals": [
+      "Zbudować Jarvisa B2C"
+    ]
+  }
+}

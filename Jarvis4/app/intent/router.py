@@ -8,7 +8,6 @@ from app.pro_mode import is_pro_enabled, set_pro_enabled
 from app.llm.ollama_client import OllamaClient
 from app.memory.factory import get_memory_store
 from app.pro.pm_tools import handle_pro_command
-from app.b2c.tasks import add_task, list_tasks, mark_done, detect_scope
 
 
 def _normalize(s: str) -> str:
@@ -176,25 +175,7 @@ def route_intent(message: str, *, mode: str | None = None) -> Dict[str, str]:
                 # already a user-facing reply
                 return {"response": str(handled)}
 
-    
-    # ---------- B2C: TASKS / SECOND BRAIN ----------
-    # Minimal MVP: tasks are stored in data/memory/tasks.json
-    if persona == "b2c":
-        # add task
-        if re.match(r"^\s*(dodaj|dopisz|wrzu[cć]|utwórz)\b", low):
-            out = add_task(msg)
-            return {"reply": out.get("reply",""), "intent": "task_add", "task": out.get("task")}
-        # list tasks
-        if ("zadania" in low) or re.match(r"^\s*(pokaż|pokaz|lista|co mam)\b", low):
-            scope = detect_scope(msg)
-            out = list_tasks(scope)
-            return {"reply": out.get("reply",""), "intent": "task_list", "tasks": out.get("tasks", []), "scope": scope}
-        # done task
-        if re.match(r"^\s*(zrobione|wykonane|odhacz|odchacz|done)\b", low):
-            out = mark_done(msg)
-            return {"reply": out.get("reply",""), "intent": "task_done", "task": out.get("task")}
-
-# ---------- STATUS ----------
+    # ---------- STATUS ----------
     if low in {"/status", "status", "stan", "jak stoi status"}:
         goal_txt = goals[0] if goals else None
         city = profile.get("city") or profile.get("miasto")
