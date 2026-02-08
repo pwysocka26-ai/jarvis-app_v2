@@ -8,3 +8,4 @@ alembic
 psycopg[binary]
 requests
 redis
+apscheduler

@@ -6,6 +6,15 @@ import os
 from app.db import Base
 from app import models  # noqa: F401
 
+# --- Jarvis patch: load .env.local for Alembic (so DATABASE_URL is respected) ---
+from pathlib import Path as _Path
+from dotenv import load_dotenv as _load_dotenv
+
+_repo_root = _Path(__file__).resolve().parents[1]
+_env_local = _repo_root / ".env.local"
+# Nie nadpisuj istniejących zmiennych środowiskowych; tylko doładuj brakujące.
+_load_dotenv(_env_local, override=False)
+# --- end patch ---
 config = context.config
 
 if config.config_file_name is not None:

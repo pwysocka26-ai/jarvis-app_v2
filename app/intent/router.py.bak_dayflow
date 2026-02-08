@@ -9,9 +9,6 @@ from app.llm.ollama_client import OllamaClient
 from app.memory.factory import get_memory_store
 from app.pro.pm_tools import handle_pro_command
 from app.b2c.tasks import add_task, list_tasks, mark_done, detect_scope
-from app.dayflow.morning import morning_brief
-from app.dayflow.chaos import chaos_brief
-from app.dayflow.evening import evening_summary
 
 
 def _normalize(s: str) -> str:
@@ -92,17 +89,6 @@ def route_intent(message: str, *, mode: str | None = None) -> Dict[str, str]:
 
     msg = _normalize(message)
     low = msg.lower()
-
-    # ---------- DAYFLOW UX (RANO / CHAOS / WIECZÓR) ----------
-    if low in {"rano", "poranek"}:
-        return morning_brief()
-
-    if low in {"plan się sypie", "plan sie sypie", "chaos"}:
-        return chaos_brief()
-
-    if low in {"wieczór", "wieczor"}:
-        return evening_summary()
-
 
     store = get_memory_store()
     # MemoryStore (file) ma KV; DB store może nie mieć — zabezpieczamy się getattr
