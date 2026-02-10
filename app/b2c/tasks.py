@@ -1,212 +1,277 @@
 from __future__ import annotations
 
 import json
-import os
 import re
-from dataclasses import dataclass, asdict
-from datetime import datetime, date, timedelta, time
+from dataclasses import dataclass
+from datetime import date, datetime
+from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
-TASKS_FILE = os.path.join("data", "memory", "tasks.json")
+# --- Files ---
+DATA_DIR = Path("data/memory")
+TASKS_FILE = DATA_DIR / "tasks.json"
+PENDING_TRAVEL_FILE = DATA_DIR / "pending_travel.json"
 
-
-def _ensure_dirs() -> None:
-    os.makedirs(os.path.dirname(TASKS_FILE), exist_ok=True)
-
-
-def _load() -> Dict[str, Any]:
-    _ensure_dirs()
-    if not os.path.exists(TASKS_FILE):
-        return {"next_id": 1, "tasks": []}
-    try:
-        with open(TASKS_FILE, "r", encoding="utf-8") as f:
-            data = json.load(f)
-        if not isinstance(data, dict):
-            return {"next_id": 1, "tasks": []}
-        data.setdefault("next_id", 1)
-        data.setdefault("tasks", [])
-        if not isinstance(data["tasks"], list):
-            data["tasks"] = []
-        return data
-    except Exception:
-        # if file is corrupt, do not crash the whole server
-        return {"next_id": 1, "tasks": []}
-
-
-def _atomic_write(data: Dict[str, Any]) -> None:
-    _ensure_dirs()
-    tmp = TASKS_FILE + ".tmp"
-    with open(tmp, "w", encoding="utf-8") as f:
-        json.dump(data, f, ensure_ascii=False, indent=2)
-    os.replace(tmp, TASKS_FILE)
-
-
-def _now() -> datetime:
-    return datetime.now()
-
-
-def _parse_time_hhmm(text: str) -> Optional[time]:
-    m = re.search(r"\b([01]?\d|2[0-3])[:\.]([0-5]\d)\b", text)
-    if not m:
-        return None
-    return time(int(m.group(1)), int(m.group(2)))
-
-
-_WEEKDAYS = {
-    "pon": 0, "poniedziałek": 0, "poniedzialek": 0,
-    "wt": 1, "wtorek": 1,
-    "śr": 2, "sr": 2, "środa": 2, "sroda": 2,
-    "czw": 3, "czwartek": 3,
-    "pt": 4, "piątek": 4, "piatek": 4,
-    "sob": 5, "sobota": 5,
-    "nd": 6, "niedz": 6, "niedziela": 6,
+# --- Travel mode parsing ---
+TRAVEL_MODES = {
+    "samochodem": "samochodem",
+    "auto": "samochodem",
+    "autem": "samochodem",
+    "rowerem": "rowerem",
+    "bike": "rowerem",
+    "pieszo": "pieszo",
+    "piechota": "pieszo",
+    "komunikacją": "komunikacją",
+    "komunikacja": "komunikacją",
+    "zbiorkom": "komunikacją",
+    "tramwajem": "komunikacją",
+    "metrem": "komunikacją",
+    "autobusem": "komunikacją",
 }
 
-def _next_weekday(d: date, weekday: int) -> date:
-    # returns next occurrence of weekday (including today if same weekday)
-    delta = (weekday - d.weekday()) % 7
-    return d + timedelta(days=delta)
+def _ensure_dir(p: Path) -> None:
+    p.parent.mkdir(parents=True, exist_ok=True)
 
-def _parse_due(text: str) -> Optional[str]:
+def _load_json(path: Path, default: Any) -> Any:
+    if not path.exists():
+        return default
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return default
+
+def _save_json(path: Path, data: Any) -> None:
+    _ensure_dir(path)
+    path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+
+def _now_iso() -> str:
+    return datetime.now().isoformat(timespec="seconds")
+
+def parse_travel_mode(text: str) -> Optional[str]:
+    low = (text or "").strip().lower()
+    # exact token
+    if low in TRAVEL_MODES:
+        return TRAVEL_MODES[low]
+    # search word boundary
+    for k, v in TRAVEL_MODES.items():
+        if re.search(rf"\b{re.escape(k)}\b", low):
+            return v
+    return None
+
+def _parse_date_time_polish(text: str) -> Tuple[Optional[str], Optional[str], str]:
     """
-    Very small Polish date/time parser for MVP:
-    - dzisiaj / jutro
-    - weekday names (pon/wt/sr/...)
-    - optional HH:MM
-    Returns ISO string or None.
+    Very small parser for phrases like:
+    - "dziś 19:00"
+    - "jutro 8:30"
+    - "2026-02-10 19:00"
+    Returns (due_date_iso 'YYYY-MM-DD', due_time 'HH:MM', cleaned_text_without_datetime)
     """
-    low = text.lower()
-    t = _parse_time_hhmm(low)
+    s = (text or "").strip()
+
+    # ISO date optionally + time
+    m = re.search(r"(\d{4}-\d{2}-\d{2})(?:\s+(\d{1,2}:\d{2}))?", s)
+    if m:
+        d = m.group(1)
+        t = m.group(2)
+        cleaned = (s[:m.start()] + s[m.end():]).strip(" ,")
+        return d, t, cleaned
+
     today = date.today()
-    d = None
-    if "jutro" in low:
-        d = today + timedelta(days=1)
-    elif "dzisiaj" in low or "dziś" in low or "dzis" in low:
-        d = today
+    if re.search(r"\bdzi[śs]\b", s, flags=re.IGNORECASE):
+        d = today.isoformat()
+        s2 = re.sub(r"\bdzi[śs]\b", "", s, flags=re.IGNORECASE).strip()
+    elif re.search(r"\bjutro\b", s, flags=re.IGNORECASE):
+        d = (today.fromordinal(today.toordinal() + 1)).isoformat()
+        s2 = re.sub(r"\bjutro\b", "", s, flags=re.IGNORECASE).strip()
     else:
-        for key, wd in _WEEKDAYS.items():
-            if re.search(rf"\b{re.escape(key)}\b", low):
-                d = _next_weekday(today, wd)
-                break
-    if d is None and t is None:
-        return None
-    if d is None:
-        d = today
-    if t is None:
-        # if only date-like words exist, default time 09:00 (can be refined later)
-        t = time(9, 0)
-    return datetime.combine(d, t).isoformat(timespec="minutes")
+        d = None
+        s2 = s
 
+    mt = re.search(r"\b(\d{1,2}:\d{2})\b", s2)
+    t = mt.group(1) if mt else None
+    if t:
+        s2 = (s2[:mt.start()] + s2[mt.end():]).strip(" ,")
+    return d, t, s2.strip(" ,")
 
-def add_task(raw_text: str) -> Dict[str, Any]:
-    """
-    raw_text: user message e.g. "Dodaj: kupić mleko jutro 18:00"
-    """
-    text = raw_text.strip()
-    # remove command prefix
-    text = re.sub(r"^\s*(dodaj|dopisz|wrzu[cć]|utwórz)\s*[:\-]?\s*", "", text, flags=re.I)
-    due = _parse_due(text)
-    # remove date/time tokens from title (simple cleanup)
-    title = re.sub(r"\b(dzisiaj|dziś|dzis|jutro)\b", "", text, flags=re.I).strip()
-    title = re.sub(r"\b([01]?\d|2[0-3])[:\.]([0-5]\d)\b", "", title).strip()
-    title = re.sub(r"\s{2,}", " ", title).strip()
-    if not title:
-        title = text
+def load_tasks_db() -> Dict[str, Any]:
+    db = _load_json(TASKS_FILE, default={"tasks": []})
+    if not isinstance(db, dict) or "tasks" not in db or not isinstance(db.get("tasks"), list):
+        db = {"tasks": []}
+    return db
 
-    data = _load()
-    tid = int(data.get("next_id") or 1)
+def save_tasks_db(db: Dict[str, Any]) -> None:
+    _save_json(TASKS_FILE, db)
+
+def _next_id(tasks: List[Dict[str, Any]]) -> int:
+    ids = [t.get("id") for t in tasks if isinstance(t.get("id"), int)]
+    return (max(ids) + 1) if ids else 1
+
+def add_task(raw: str) -> Dict[str, Any]:
+    """Adds a task. Accepts optional travel mode anywhere in text."""
+    raw = (raw or "").strip()
+    travel = parse_travel_mode(raw)
+
+    due_date, due_time, rest = _parse_date_time_polish(raw)
+    title = rest.strip()
+    # normalize separators
+    title = re.sub(r"\s+", " ", title).strip(" ,")
+
+    # if user wrote "... , samochodem" treat as travel mode and remove from title
+    if travel:
+        title = re.sub(rf"(?:,|\s)+{re.escape(travel)}\s*$", "", title, flags=re.IGNORECASE).strip(" ,")
+
+    db = load_tasks_db()
+    tasks = db["tasks"]
+    task_id = _next_id(tasks)
+
+    due_at = None
+    if due_date and due_time:
+        due_at = f"{due_date}T{due_time}"
+    elif due_date:
+        due_at = due_date
+
     task = {
-        "id": tid,
-        "title": title,
-        "created_at": _now().isoformat(timespec="seconds"),
-        "due_at": due,
+        "id": task_id,
+        "title": title if title else "(bez tytułu)",
+        "created_at": _now_iso(),
+        "due_at": due_at,
         "done": False,
         "tags": [],
         "priority": None,
+        "travel_mode": travel,  # None if not set
     }
-    data["next_id"] = tid + 1
-    data["tasks"].append(task)
-    _atomic_write(data)
+    tasks.append(task)
+    save_tasks_db(db)
 
-    when = f" (na {due.replace('T',' ')})" if due else ""
-    return {"reply": f"✅ Dodane zadanie #{tid}: {title}{when}", "task": task}
+    reply = f"✅ Dodane zadanie #{task_id}: {task['title']}"
+    if due_at:
+        reply += f" (na {due_at})"
+    if travel:
+        reply += f" — dojazd: {travel}"
+    return {"reply": reply, "task": task}
 
+def list_tasks_for_date(d: str) -> List[Dict[str, Any]]:
+    db = load_tasks_db()
+    out = []
+    for t in db["tasks"]:
+        due = (t.get("due_at") or "")
+        if due.startswith(d):
+            out.append(t)
+    # sort by time if present
+    def key(t):
+        due = t.get("due_at") or ""
+        return due
+    out.sort(key=key)
+    return out
 
-def list_tasks(scope: str = "all") -> Dict[str, Any]:
-    data = _load()
-    tasks = data.get("tasks", [])
-    now = _now()
+def get_task(task_id: int) -> Optional[Dict[str, Any]]:
+    db = load_tasks_db()
+    for t in db["tasks"]:
+        if t.get("id") == task_id:
+            return t
+    return None
 
-    def is_today(t: Dict[str, Any]) -> bool:
-        if not t.get("due_at"):
-            return False
+def update_task(task_id: int, **fields: Any) -> Optional[Dict[str, Any]]:
+    db = load_tasks_db()
+    for t in db["tasks"]:
+        if t.get("id") == task_id:
+            t.update(fields)
+            save_tasks_db(db)
+            return t
+    return None
+
+# --- Pending travel (no conversation_state.json needed) ---
+def get_pending_travel() -> Optional[Dict[str, Any]]:
+    data = _load_json(PENDING_TRAVEL_FILE, default=None)
+    if not isinstance(data, dict):
+        return None
+    if not isinstance(data.get("task_id"), int):
+        return None
+    return data
+
+def set_pending_travel(task_id: int, *, created_from: str = "rano") -> None:
+    _save_json(PENDING_TRAVEL_FILE, {"task_id": task_id, "created_from": created_from, "created_at": _now_iso()})
+
+def clear_pending_travel() -> None:
+    if PENDING_TRAVEL_FILE.exists():
         try:
-            dt = datetime.fromisoformat(t["due_at"])
-            return dt.date() == now.date()
+            PENDING_TRAVEL_FILE.unlink()
         except Exception:
-            return False
+            _save_json(PENDING_TRAVEL_FILE, None)
 
-    def is_week(t: Dict[str, Any]) -> bool:
-        if not t.get("due_at"):
-            return False
-        try:
-            dt = datetime.fromisoformat(t["due_at"])
-            start = now.date() - timedelta(days=now.date().weekday())
-            end = start + timedelta(days=6)
-            return start <= dt.date() <= end
-        except Exception:
-            return False
-
-    filtered: List[Dict[str, Any]]
-    if scope == "today":
-        filtered = [t for t in tasks if (not t.get("done")) and is_today(t)]
-    elif scope == "week":
-        filtered = [t for t in tasks if (not t.get("done")) and is_week(t)]
-    else:
-        filtered = [t for t in tasks if not t.get("done")]
-
-    if not filtered:
-        label = {"today":"na dziś", "week":"na ten tydzień"}.get(scope, "")
-        return {"reply": f"✅ Nie masz aktywnych zadań {label}."}
-
-    lines = []
-    for t in sorted(filtered, key=lambda x: (x.get("due_at") or "9999", x.get("id", 0))):
-        due = ""
-        if t.get("due_at"):
-            try:
-                dt = datetime.fromisoformat(t["due_at"])
-                due = dt.strftime(" (%Y-%m-%d %H:%M)")
-            except Exception:
-                due = f" ({t['due_at']})"
-        lines.append(f"#{t['id']}: {t['title']}{due}")
-
-    header = {"today":"📅 Zadania na dziś:", "week":"🗓️ Zadania na tydzień:", "all":"📌 Twoje zadania:"}.get(scope, "📌 Twoje zadania:")
-    return {"reply": header + "\n" + "\n".join(lines), "tasks": filtered}
+def apply_travel_mode_to_task_id(mode: str, task_id: int) -> Dict[str, Any]:
+    mode = parse_travel_mode(mode) or mode
+    t = update_task(task_id, travel_mode=mode)
+    if not t:
+        return {"ok": False, "reply": f"Nie znalazłem zadania #{task_id}.", "task_id": task_id}
+    return {"ok": True, "reply": f"✅ Ustawiono dojazd dla zadania #{task_id}: {mode}", "task": t}
 
 
-def mark_done(raw_text: str) -> Dict[str, Any]:
+def apply_travel_mode_to_pending(message: str) -> dict | None:
+    """Handle user's transport choice for a previously requested travel-mode decision.
+
+    - If there is no pending travel decision -> return None (router may continue).
+    - If there is pending but message is not a recognized choice -> return a short reminder (and DO NOT fall back to LLM).
     """
-    raw_text: "Zrobione 3" or "zrobione #3" or "odhacz 3"
-    """
-    m = re.search(r"#?\b(\d{1,6})\b", raw_text)
-    if not m:
-        return {"reply": "Podaj numer zadania, np. `zrobione 3`."}
-    tid = int(m.group(1))
-    data = _load()
-    tasks = data.get("tasks", [])
-    for t in tasks:
-        if int(t.get("id", -1)) == tid:
-            t["done"] = True
-            t["done_at"] = _now().isoformat(timespec="seconds")
-            _atomic_write(data)
-            return {"reply": f"✅ Oznaczone jako zrobione: #{tid} {t.get('title','')}", "task": t}
-    return {"reply": f"Nie znalazłam zadania #{tid}."}
+    pending = get_pending_travel()
+    if not pending:
+        return None
 
+    msg = (message or "").strip().lower()
 
-def detect_scope(message: str) -> str:
-    low = message.lower()
-    if "dzis" in low or "dziś" in low or "dzisiaj" in low or "na dziś" in low:
-        return "today"
-    if "tydzie" in low or "na tydzień" in low:
-        return "week"
-    return "all"
+    # Accept both words and numeric shortcuts
+    mode_map = {
+        "1": "walking",
+        "pieszo": "walking",
+        "na piechote": "walking",
+        "na piechotę": "walking",
+        "2": "transit",
+        "komunikacja": "transit",
+        "tramwaj": "transit",
+        "metro": "transit",
+        "autobusem": "transit",
+        "3": "car",
+        "samochodem": "car",
+        "auto": "car",
+        "samochod": "car",
+        "samochód": "car",
+    }
+
+    if msg not in mode_map:
+        return {"reply": "Wybierz środek transportu: 1) pieszo  2) komunikacja  3) samochód"}
+
+    task_id = pending.get("task_id")
+    if not task_id:
+        clear_pending_travel()
+        return {"reply": "Ups — nie widzę zadania do dojazdu. Wpisz 'rano' i spróbuj ponownie."}
+
+    mode = mode_map[msg]
+    ok = apply_travel_mode_to_task_id(mode, task_id)
+    clear_pending_travel()
+
+    if not ok:
+        return {"reply": "Nie udało się ustawić trybu dojazdu dla tego zadania."}
+
+    # MVP: prosty, deterministyczny szacunek czasu wyjścia (bez zewnętrznych API)
+    task = get_task(int(task_id)) or {}
+    due_at = task.get("due_at")
+
+    mins_by_mode = {"walking": 60, "transit": 40, "car": 25}
+    travel_min = mins_by_mode.get(mode, 30)
+    buffer_min = 10
+
+    leave_line = ""
+    try:
+        from datetime import datetime, timedelta
+        if due_at:
+            s = str(due_at).replace("T", " ")
+            dt = datetime.fromisoformat(s)
+            leave = dt - timedelta(minutes=travel_min + buffer_min)
+            leave_line = (
+                f"\n\n⏱️ Proponowane wyjście: **{leave.strftime('%H:%M')}** "
+                f"(dojazd ~{travel_min} min + {buffer_min} min zapasu)"
+            )
+    except Exception:
+        pass
+
+    return {"reply": f"✅ Ustawione: {mode}.{leave_line}"}
