@@ -123,6 +123,10 @@ function Start-DockerIfConfigured {
 
   try {
     Info "Starting Docker services (docker compose up -d) ..."
+    # Quick check: is Docker Engine reachable?
+    try { & docker info | Out-Null } catch {
+      throw "Docker Desktop/Engine nie działa. Uruchom Docker Desktop i poczekaj aż będzie Running."
+    }
     & docker compose -f docker-compose.local.yml up -d | Out-Host
   } catch {
     Warn ("docker compose failed: " + $_.Exception.Message)

@@ -79,3 +79,11 @@ PATCH_NOTES.md
 tools/patch_*.py
 tools/fix_*.py
 *.bak
+# backups / temp
+*.bak
+*.bak_*
+*.bak.*
+*.swp
+*~
+
+data/runtime/

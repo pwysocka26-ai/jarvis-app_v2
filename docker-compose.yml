@@ -10,11 +10,6 @@ services:
       - "5432:5432"
     volumes:
       - jarvis_pgdata:/var/lib/postgresql/data
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U jarvis -d jarvis"]
-      interval: 5s
-      timeout: 3s
-      retries: 20
 
   redis:
     image: redis:7
@@ -24,11 +19,6 @@ services:
     command: ["redis-server", "--appendonly", "yes"]
     volumes:
       - jarvis_redisdata:/data
-    healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
-      interval: 5s
-      timeout: 3s
-      retries: 20
 
 volumes:
   jarvis_pgdata:
