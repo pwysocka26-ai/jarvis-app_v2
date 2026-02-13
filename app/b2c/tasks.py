@@ -11,6 +11,7 @@ from typing import Any, Dict, List, Optional, Tuple
 DATA_DIR = Path("data/memory")
 TASKS_FILE = DATA_DIR / "tasks.json"
 PENDING_TRAVEL_FILE = DATA_DIR / "pending_travel.json"
+PENDING_REMINDER_FILE = DATA_DIR / "pending_reminder.json"
 
 # --- Travel mode parsing ---
 TRAVEL_MODES = {
@@ -90,6 +91,10 @@ def _parse_date_time_polish(text: str) -> Tuple[Optional[str], Optional[str], st
     mt = re.search(r"\b(\d{1,2}:\d{2})\b", s2)
     t = mt.group(1) if mt else None
     if t:
+        # If user provided only a time (e.g. "23:50") without "dziś/jutro/2026-..",
+        # default to today so the task appears in today's plan.
+        if d is None:
+            d = today.isoformat()
         s2 = (s2[:mt.start()] + s2[mt.end():]).strip(" ,")
     return d, t, s2.strip(" ,")
 
@@ -120,6 +125,15 @@ def add_task(raw: str) -> Dict[str, Any]:
     if travel:
         title = re.sub(rf"(?:,|\s)+{re.escape(travel)}\s*$", "", title, flags=re.IGNORECASE).strip(" ,")
 
+    # Optional location parsing: if user uses comma-separated format
+    # e.g. "dentysta, Niemcewicza 25, Warszawa" -> title="dentysta", location="Niemcewicza 25, Warszawa"
+    location = None
+    if "," in title:
+        parts = [p.strip() for p in title.split(",") if p.strip()]
+        if len(parts) >= 2:
+            title = parts[0]
+            location = ", ".join(parts[1:])
+
     db = load_tasks_db()
     tasks = db["tasks"]
     task_id = _next_id(tasks)
@@ -138,6 +152,9 @@ def add_task(raw: str) -> Dict[str, Any]:
         "done": False,
         "tags": [],
         "priority": None,
+        "location": location,
+        "reminder_at": None,
+        "reminder_enabled": False,
         "travel_mode": travel,  # None if not set
     }
     tasks.append(task)
@@ -198,6 +215,46 @@ def clear_pending_travel() -> None:
             PENDING_TRAVEL_FILE.unlink()
         except Exception:
             _save_json(PENDING_TRAVEL_FILE, None)
+
+
+# --- Pending reminder (yes/no) ---
+def get_pending_reminder() -> Optional[Dict[str, Any]]:
+    data = _load_json(PENDING_REMINDER_FILE, default=None)
+    if not isinstance(data, dict):
+        return None
+    if not isinstance(data.get("task_id"), int):
+        return None
+    if not isinstance(data.get("reminder_at"), str):
+        return None
+    return data
+
+def set_pending_reminder(task_id: int, reminder_at: str, *, created_from: str = "rano") -> None:
+    _save_json(PENDING_REMINDER_FILE, {"task_id": task_id, "reminder_at": reminder_at, "created_from": created_from, "created_at": _now_iso()})
+
+def clear_pending_reminder() -> None:
+    if PENDING_REMINDER_FILE.exists():
+        try:
+            PENDING_REMINDER_FILE.unlink()
+        except Exception:
+            _save_json(PENDING_REMINDER_FILE, None)
+
+def parse_yes_no(text: str) -> Optional[bool]:
+    low = (text or "").strip().lower()
+    yes = {"tak", "t", "ok", "okej", "jasne", "pewnie", "y", "yes"}
+    no  = {"nie", "n", "no", "nah", "cancel", "anuluj"}
+    if low in yes:
+        return True
+    if low in no:
+        return False
+    return None
+
+def set_task_reminder(task_id: int, reminder_at: str, enabled: bool) -> Dict[str, Any]:
+    t = update_task(task_id, reminder_at=reminder_at, reminder_enabled=enabled)
+    if not t:
+        return {"ok": False, "reply": f"Nie znalazłem zadania #{task_id}."}
+    if enabled:
+        return {"ok": True, "reply": f"⏰ Ustawiłem przypomnienie dla zadania #{task_id} na **{reminder_at}**."}
+    return {"ok": True, "reply": f"OK, bez przypomnienia dla zadania #{task_id}."}
 
 def apply_travel_mode_to_task_id(mode: str, task_id: int) -> Dict[str, Any]:
     mode = parse_travel_mode(mode) or mode

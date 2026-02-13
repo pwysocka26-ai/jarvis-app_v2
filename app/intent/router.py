@@ -5,7 +5,8 @@ from typing import Any, Dict, Optional
 from app.b2c import tasks as tasks_mod
 from app.b2c.travel_mode import morning_brief
 
-def route_intent( message: str, persona: str = "b2c", mode: Optional[str] = None, **kwargs) -> Dict[str, Any]:
+
+def route_intent(message: str, persona: str = "b2c", mode: Optional[str] = None, **kwargs) -> Dict[str, Any]:
     msg = (message or "").strip()
     low = msg.lower()
 
@@ -16,7 +17,24 @@ def route_intent( message: str, persona: str = "b2c", mode: Optional[str] = None
         if tm:
             out = tasks_mod.apply_travel_mode_to_task_id(tm, int(pending["task_id"]))
             tasks_mod.clear_pending_travel()
-            reply = out.get("reply", "OK")
+
+            # ✅ UX improvement: immediately continue the "rano" flow
+            # so user doesn't have to type "rano" again.
+            try:
+                follow = morning_brief()
+                follow_reply = (follow or {}).get("reply") or ""
+            except Exception:
+                follow_reply = ""
+
+            base_reply = out.get("reply", "OK")
+
+            # If morning_brief produced something useful, append it.
+            if follow_reply and follow_reply.strip():
+                reply = base_reply + "\n\n" + follow_reply
+                return {"intent": "set_travel_mode", "reply": reply, "response": reply}
+
+            # Fallback: just confirm travel mode
+            reply = base_reply
             return {"intent": "set_travel_mode", "reply": reply, "response": reply}
         else:
             reply = "Nie złapałem sposobu dojazdu. Napisz: `samochodem` / `rowerem` / `pieszo` / `komunikacją`."
