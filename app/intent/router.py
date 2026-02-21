@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Any, Dict, Optional, List, Tuple
+from typing import Any, Dict, Optional, List
 import re
 from datetime import date, datetime, timedelta
 
@@ -9,6 +9,13 @@ from app.b2c.travel_mode import morning_brief
 
 YES = {"tak", "t", "yes", "y", "ok", "jasne", "pewnie"}
 NO = {"nie", "n", "no"}
+
+# Wersja A: emoji (działa wszędzie)
+PRIORITY_EMOJI = {
+    1: "🔴",  # p1 czerwone kółko
+    2: "🟠",  # p2 pomarańczowe kółko (domyślne p2 ukrywamy w widoku)
+    3: "🟢",  # p3 zielone kółko
+}
 
 
 def _as_reply(intent: str, reply: str, extra: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
@@ -34,8 +41,7 @@ def _parse_time_to_minutes(t: Optional[str]) -> Optional[int]:
     m = re.match(r"^(\d{1,2}):(\d{2})$", str(t).strip())
     if not m:
         return None
-    hh = int(m.group(1))
-    mm = int(m.group(2))
+    hh, mm = int(m.group(1)), int(m.group(2))
     if hh < 0 or hh > 23 or mm < 0 or mm > 59:
         return None
     return hh * 60 + mm
@@ -51,19 +57,16 @@ def _parse_created_at(ts: Optional[str]) -> Optional[datetime]:
 
 
 def _sort_for_list(tasks: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-    """Order for display & delete-by-position.
-
-    - Tasks with a time first (chronological).
-    - Tasks without time after timed tasks, ordered by created_at.
+    """Spójne sortowanie jak dotychczas:
+    - zadania z godziną najpierw (chronologicznie),
+    - bez godziny na końcu (po created_at).
     """
-
     def key(t: Dict[str, Any]):
         time_min = _parse_time_to_minutes(t.get("time"))
         has_time = 0 if time_min is not None else 1
         created = _parse_created_at(t.get("created_at")) or datetime.max
         time_key = time_min if time_min is not None else 10**9
         return (has_time, time_key, created)
-
     return sorted([t for t in tasks if isinstance(t, dict)], key=key)
 
 
@@ -75,47 +78,39 @@ def _label_for_date(d: date) -> str:
     return d.isoformat()
 
 
-def _parse_date_token(tok: str) -> Optional[date]:
-    t = (tok or "").strip().lower()
-    if t in {"dziś", "dzis", "dzisiaj"}:
+def _parse_date_arg(arg: str) -> Optional[date]:
+    if arg in {"dziś", "dzis", "dzisiaj"}:
         return date.today()
-    if t == "jutro":
+    if arg == "jutro":
         return date.today() + timedelta(days=1)
     try:
-        return date.fromisoformat(tok)
+        return date.fromisoformat(arg)
     except Exception:
         return None
 
 
-def _pick_date_and_index(parts: List[str], default_date: date) -> Tuple[Optional[date], Optional[int]]:
-    """Parse commands like:
-    - ['usuń','2'] -> (default_date, 2)
-    - ['usuń','jutro','2'] -> (tomorrow, 2)
-    - ['usuń','2026-02-22','2'] -> (iso_date, 2)
+def _extract_date_and_index(parts: List[str], default_date: date) -> Optional[tuple[date, int]]:
+    """Parse:
+    - ['usuń','2'] -> (today,2)
+    - ['usuń','jutro','2'] -> (tomorrow,2)
+    - ['usuń','2026-02-22','2'] -> (date,2)
     """
-    if len(parts) < 2:
-        return None, None
-
     if len(parts) == 2:
-        # usuń 2
         try:
-            return default_date, int(parts[1])
+            return (default_date, int(parts[1]))
         except Exception:
-            return default_date, None
+            return None
 
-    # len >= 3: maybe date token + number
-    d = _parse_date_token(parts[1])
-    if d is None:
-        # if second token isn't a date token, treat it as number and ignore rest
+    if len(parts) >= 3:
+        d = _parse_date_arg(parts[1])
+        if d is None:
+            return None
         try:
-            return default_date, int(parts[1])
+            return (d, int(parts[2]))
         except Exception:
-            return default_date, None
+            return None
 
-    try:
-        return d, int(parts[2])
-    except Exception:
-        return d, None
+    return None
 
 
 def route_intent(message: str, persona: str = "b2c", mode: Optional[str] = None, **kwargs) -> Dict[str, Any]:
@@ -136,138 +131,134 @@ def route_intent(message: str, persona: str = "b2c", mode: Optional[str] = None,
         )
 
     # =============================
-    # DELETE (LIVE numeracja) + data
+    # PRIORYTET (dla istniejącego zadania)
+    # priorytet 2 p1
+    # priorytet jutro 2 p3
+    # priorytet 2026-02-22 2 p1
     # =============================
-    if low.startswith("usuń") or low.startswith("usun"):
-        parts = low.split()
-        target_date, n = _pick_date_and_index(parts, default_date=date.today())
-        if n is None:
-            return _as_reply("delete_task", "Użyj: `usuń 2` albo `usuń jutro 2` albo `usuń 2026-02-22 2`.")
-
-        if target_date is None:
-            target_date = date.today()
-
-        tasks_raw = tasks_mod.list_tasks_for_date(target_date) or []
-        tasks = _sort_for_list(tasks_raw)
-
-        # delete by position
-        if 1 <= n <= len(tasks):
-            tid = int(tasks[n - 1].get("id"))
-            tasks_mod.delete_task_by_id(tid)
-            return _as_reply("delete_task", f"🗑 Usunięto zadanie #{n} ({_label_for_date(target_date)}).")
-
-        # fallback: treat as ID (historical behavior)
-        out = tasks_mod.delete_task_by_id(n)
-        return _as_reply("delete_task", _reply_from_any(out, default=f"🗑 Usunięto zadanie #{n}."))
-
-    # =============================
-    # PRIORITY (update existing task)
-    # =============================
-    # Examples:
-    # - priorytet 2 p1
-    # - priorytet jutro 2 p3
-    # - priorytet 2026-02-22 2 p1
     if low.startswith("priorytet"):
         parts = low.split()
-        # expect: priorytet [date] <n> p<1-5>
-        if len(parts) < 3:
+        # Formaty:
+        # priorytet <n> p<k>
+        # priorytet <date> <n> p<k>
+        if len(parts) not in {3, 4}:
             return _as_reply("set_priority", "Użyj: `priorytet 2 p1` albo `priorytet jutro 2 p3`.")
 
-        # Determine if parts[1] is date token
-        d = _parse_date_token(parts[1])
-        if d is None:
-            # priorytet 2 p1
+        if len(parts) == 3:
             target_date = date.today()
-            idx_pos = 1
+            n_s = parts[1]
+            p_s = parts[2]
         else:
-            target_date = d
-            idx_pos = 2
-
-        if len(parts) <= idx_pos + 1:
-            return _as_reply("set_priority", "Użyj: `priorytet 2 p1` albo `priorytet jutro 2 p3`.")
+            target_date = _parse_date_arg(parts[1])
+            if target_date is None:
+                return _as_reply("set_priority", "Nie rozumiem daty. Użyj: `priorytet jutro 2 p3` albo `priorytet 2026-02-22 2 p1`.")
+            n_s = parts[2]
+            p_s = parts[3]
 
         try:
-            n = int(parts[idx_pos])
+            n = int(n_s)
         except Exception:
-            return _as_reply("set_priority", "Podaj numer zadania, np: `priorytet 2 p1`.")
+            return _as_reply("set_priority", "Podaj numer z listy, np. `priorytet 2 p1`.")
 
-        p_token = parts[idx_pos + 1]
-        m = re.match(r"^p([1-5])$", p_token)
+        m = re.match(r"^p?(\d)$", p_s)
         if not m:
-            return _as_reply("set_priority", "Podaj priorytet jako `p1`..`p5`, np: `priorytet 2 p1`.")
+            return _as_reply("set_priority", "Podaj priorytet jako p1..p5, np. `priorytet 2 p1`.")
         pr = int(m.group(1))
+        if pr < 1 or pr > 5:
+            return _as_reply("set_priority", "Priorytet musi być w zakresie p1..p5.")
 
-        tasks_raw = tasks_mod.list_tasks_for_date(target_date) or []
-        tasks = _sort_for_list(tasks_raw)
-
+        tasks = _sort_for_list(tasks_mod.list_tasks_for_date(target_date) or [])
         if not (1 <= n <= len(tasks)):
             return _as_reply("set_priority", f"Nie ma zadania #{n} na {_label_for_date(target_date)}.")
 
-        tid = int(tasks[n - 1].get("id"))
-        updated = tasks_mod.update_task(tid, priority=pr)
+        task = tasks[n - 1]
+        tid = int(task.get("id"))
+        out = tasks_mod.update_task(tid, priority=pr, priority_explicit=True)
+        if not out:
+            return _as_reply("set_priority", "Nie udało się ustawić priorytetu.")
 
-        if not updated:
-            return _as_reply("set_priority", "Nie udało się ustawić priorytetu (zadanie nie znalezione).")
+        # Informacyjnie: pokaż emoji (z ukrywaniem default p2 w liście, ale tu możemy potwierdzić p2 też)
+        emoji = PRIORITY_EMOJI.get(pr, f"p{pr}")
+        return _as_reply("set_priority", f"✅ Ustawiono priorytet {emoji} dla zadania #{n} na {_label_for_date(target_date)}.")
 
-        return _as_reply("set_priority", f"✅ Ustawiono priorytet p{pr} dla zadania #{n} ({_label_for_date(target_date)}).")
+    # =============================
+    # DELETE (LIVE numeracja) + data
+    # usuń 2
+    # usuń jutro 2
+    # usuń 2026-02-22 2
+    # =============================
+    if low.startswith("usuń") or low.startswith("usun"):
+        parts = low.split()
+        parsed = _extract_date_and_index(parts, default_date=date.today())
+        if not parsed:
+            return _as_reply("delete_task", "Użyj: `usuń 2` albo `usuń jutro 2` albo `usuń 2026-02-22 2`.")
+
+        target_date, n = parsed
+        tasks = _sort_for_list(tasks_mod.list_tasks_for_date(target_date) or [])
+
+        if 1 <= n <= len(tasks):
+            tid = int(tasks[n - 1].get("id"))
+            tasks_mod.delete_task_by_id(tid)
+            return _as_reply("delete_task", f"🗑 Usunięto zadanie #{n} na {_label_for_date(target_date)}.")
+
+        # fallback: traktuj jako ID (stare zachowanie) tylko dla formatu "usuń <liczba>"
+        if len(parts) == 2:
+            out = tasks_mod.delete_task_by_id(n)
+            return _as_reply("delete_task", _reply_from_any(out, default=f"🗑 Usunięto zadanie #{n}."))
+        return _as_reply("delete_task", f"Nie ma zadania #{n} na {_label_for_date(target_date)}.")
 
     # =============================
     # LISTA (LIVE numeracja) + data
+    # lista / lista dziś / lista jutro / lista YYYY-MM-DD
     # =============================
     if low.startswith("lista") or low == "list":
         parts = (low.split() if low != "list" else ["lista"])
         target_date = date.today()
 
         if len(parts) >= 2:
-            d = _parse_date_token(parts[1])
+            d = _parse_date_arg(parts[1])
             if d is None:
                 return _as_reply("list_tasks", "Nie rozumiem daty. Użyj: `lista jutro` albo `lista 2026-02-22`.")
             target_date = d
 
-        tasks_raw = tasks_mod.list_tasks_for_date(target_date) or []
-        tasks = _sort_for_list(tasks_raw)
-
+        tasks = _sort_for_list(tasks_mod.list_tasks_for_date(target_date) or [])
         if not tasks:
             return _as_reply("list_tasks", f"Brak zaplanowanych zadań na {_label_for_date(target_date)}.")
 
         lines = [f"**Najważniejsze na {_label_for_date(target_date)}:**"]
-        pos = 0
-
-        for t in tasks:
-            pos += 1
+        for idx, t in enumerate(tasks, start=1):
             title = str(t.get("title") or "(bez tytułu)").strip()
             loc = str(t.get("location") or "").strip()
             time_s = str(t.get("time") or "").strip()
             when = f"{time_s} — " if time_s else ""
 
-            meta = []
-
-            # Priority: hide default p2 to reduce noise
+            # Emoji priorytetu:
+            # - p1: 🔴 zawsze
+            # - p2: 🟠 TYLKO jeśli zostało jawnie nadane (priority_explicit=True)
+            # - p3: 🟢 zawsze
+            emoji = ""
             try:
                 pr = int(t.get("priority")) if t.get("priority") is not None else None
             except Exception:
                 pr = None
-            if pr and pr != 2:
-                meta.append(f"p{pr}")
 
-            dur = t.get("duration_min") or t.get("duration")
-            try:
-                dur_i = int(dur) if dur is not None else None
-            except Exception:
-                dur_i = None
+            explicit = bool(t.get("priority_explicit"))
 
-            if dur_i:
-                if dur_i % 60 == 0 and dur_i >= 60:
-                    meta.append(f"{dur_i//60}h")
-                elif dur_i > 60:
-                    meta.append(f"{dur_i//60}h{dur_i%60}m")
+            if pr in PRIORITY_EMOJI:
+                if pr == 2:
+                    if explicit:
+                        emoji = PRIORITY_EMOJI[pr] + " "
                 else:
-                    meta.append(f"{dur_i}m")
+                    emoji = PRIORITY_EMOJI[pr] + " "
+            elif pr:
+                if pr == 2:
+                    if explicit:
+                        emoji = "p2 "
+                else:
+                    emoji = f"p{pr} "
 
-            meta_s = f" ({', '.join(meta)})" if meta else ""
             tail = f", {loc}" if loc else ""
-
-            lines.append(f"• #{pos} {when}{title}{meta_s}{tail}")
+            lines.append(f"• #{idx} {emoji}{when}{title}{tail}")
 
         return _as_reply("list_tasks", "\n".join(lines))
 
@@ -304,10 +295,58 @@ def route_intent(message: str, persona: str = "b2c", mode: Optional[str] = None,
             return _as_reply("set_travel_mode", "Jak jedziesz? Napisz: 'samochodem' / 'komunikacją' / 'rowerem' / 'pieszo'.")
 
     # =============================
-    # DODAJ
+    # DODAJ (spójny numer LIVE z listą)
     # =============================
     if low.startswith("dodaj:") or low.startswith("dodaj "):
         out = tasks_mod.add_task(message)
+
+        # Spróbuj wyciągnąć task_id i datę zadania z odpowiedzi tasks_mod
+        task = out.get("task") if isinstance(out, dict) else None
+        tid = None
+        task_date = date.today()
+
+        if isinstance(task, dict):
+            try:
+                tid = int(task.get("id")) if task.get("id") is not None else None
+            except Exception:
+                tid = None
+
+            # prefer due_date, else take date part of due_at
+            due_date = task.get("due_date")
+            due_at = task.get("due_at")
+            if isinstance(due_date, str):
+                try:
+                    task_date = date.fromisoformat(due_date)
+                except Exception:
+                    task_date = date.today()
+            elif isinstance(due_at, str) and len(due_at) >= 10:
+                try:
+                    task_date = date.fromisoformat(due_at[:10])
+                except Exception:
+                    task_date = date.today()
+
+        # fallback: parsuj ID z tekstu odpowiedzi
+        if tid is None:
+            txt = _reply_from_any(out, default="")
+            m = re.search(r"#(\d+)", txt)
+            if m:
+                try:
+                    tid = int(m.group(1))
+                except Exception:
+                    tid = None
+
+        # policz numer LIVE w obrębie daty zadania (jak w `lista`)
+        if tid is not None:
+            tasks_for_day = _sort_for_list(tasks_mod.list_tasks_for_date(task_date) or [])
+            for idx, t in enumerate(tasks_for_day, start=1):
+                try:
+                    if int(t.get("id")) == tid:
+                        title = str(t.get("title") or "(bez tytułu)").strip()
+                        return _as_reply("add_task", f"✅ Dodane zadanie #{idx}: {title} (na {_label_for_date(task_date)})")
+                except Exception:
+                    continue
+
+        # jeśli nie umiemy policzyć LIVE, wróć do oryginalnej odpowiedzi
         return _as_reply("add_task", _reply_from_any(out))
 
     # =============================
@@ -325,4 +364,4 @@ def route_intent(message: str, persona: str = "b2c", mode: Optional[str] = None,
             }
         return _as_reply("morning_brief", str(out))
 
-    return _as_reply("unknown", "Nie mam jeszcze tej komendy. Spróbuj: 'rano' albo 'dodaj: ...'")
+    return _as_reply("unknown", "Nie mam jeszcze tej komendy. Spróbuj: `lista`, `dodaj: ...`, `usuń ...`, `priorytet ...`.")
