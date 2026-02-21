@@ -68,7 +68,9 @@ def collect_runtime_diagnostics() -> Dict[str, Any]:
 
     return {
         "instance_id": get_or_create_instance_id(),
-        "server_time_iso": datetime.utcnow().isoformat() + "Z",
+        # Diagnostics should reflect the *local* timezone (with offset).
+        # Using UTC with a trailing `Z` was confusing (e.g. Warsaw is typically +01:00/+02:00).
+        "server_time_iso": datetime.now().astimezone().isoformat(timespec="seconds"),
         "pid": os.getpid(),
         "cwd": os.getcwd(),
         "python_executable": sys.executable,

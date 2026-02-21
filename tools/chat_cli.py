@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import json
 import os
@@ -8,6 +8,8 @@ import urllib.request
 import urllib.error
 import traceback
 from pathlib import Path
+from datetime import datetime
+import threading
 
 
 # ==========================
@@ -17,6 +19,9 @@ API_URL = os.getenv("API_URL", "http://127.0.0.1:8010/v1/chat").strip()
 API_TOKEN = os.getenv("API_TOKEN", "dev-token").strip()
 CLI_TIMEOUT_S = float(os.getenv("CLI_TIMEOUT_S", "180"))
 DEBUG = (os.getenv("JARVIS_CLI_DEBUG", "1").strip() in {"1", "true", "True", "YES", "yes"})
+REMINDER_POLL_S = float(os.getenv("JARVIS_REMINDER_POLL_S", "10"))
+
+TASKS_FILE = Path("data/memory/tasks.json")
 
 
 # ==========================
@@ -96,10 +101,108 @@ def _get_diag() -> dict:
 
 
 # ==========================
+# Reminder watcher (CLI side)
+# ==========================
+def _load_tasks_db() -> dict:
+    if not TASKS_FILE.exists():
+        return {"tasks": []}
+    try:
+        return json.loads(TASKS_FILE.read_text(encoding="utf-8"))
+    except Exception:
+        return {"tasks": []}
+
+def _atomic_write(path: Path, data: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    tmp.write_text(data, encoding="utf-8")
+    tmp.replace(path)
+
+def _save_tasks_db(db: dict) -> None:
+    _atomic_write(TASKS_FILE, json.dumps(db, ensure_ascii=False, indent=2))
+
+def _parse_iso(dt: str) -> datetime | None:
+    if not dt:
+        return None
+    try:
+        # accepts YYYY-MM-DDTHH:MM(:SS)
+        return datetime.fromisoformat(dt)
+    except Exception:
+        try:
+            return datetime.strptime(dt, "%Y-%m-%dT%H:%M")
+        except Exception:
+            return None
+
+def _notify(text: str) -> None:
+    # Print a notification without breaking the program.
+    # We don't redraw the input line perfectly in all terminals,
+    # but this is good enough for MVP.
+    print("\n" + text)
+    print("Ty> ", end="", flush=True)
+
+def reminder_watcher(stop: threading.Event) -> None:
+    log(f"Reminder watcher start poll={REMINDER_POLL_S}s tasks_file={TASKS_FILE}")
+    seen_local: set[tuple[int, str]] = set()
+
+    while not stop.is_set():
+        try:
+            db = _load_tasks_db()
+            tasks = db.get("tasks") if isinstance(db, dict) else []
+            if not isinstance(tasks, list):
+                tasks = []
+
+            now = datetime.now()
+            changed = False
+
+            for t in tasks:
+                try:
+                    tid = int(t.get("id") or 0)
+                except Exception:
+                    continue
+
+                if not t.get("reminder_enabled"):
+                    continue
+
+                reminder_at = t.get("reminder_at") or ""
+                ra = _parse_iso(str(reminder_at))
+                if not ra:
+                    continue
+
+                if ra > now:
+                    continue
+
+                fired = t.get("reminder_fired_at")
+                if fired:
+                    continue
+
+                key = (tid, str(reminder_at))
+                if key in seen_local:
+                    continue
+
+                title = (t.get("title") or "(zadanie)").strip()
+                loc = (t.get("location") or "").strip()
+                when = ra.strftime("%H:%M")
+                suffix = f" — {loc}" if loc else ""
+                _notify(f"⏰ PRZYPOMNIENIE {when}: {title}{suffix}")
+
+                t["reminder_fired_at"] = now.isoformat(timespec="seconds")
+                changed = True
+                seen_local.add(key)
+
+            if changed:
+                _save_tasks_db(db)
+
+        except Exception as e:
+            log(f"Reminder watcher error: {e!r}")
+
+        stop.wait(REMINDER_POLL_S)
+
+    log("Reminder watcher stopped")
+
+
+# ==========================
 # Utilities
 # ==========================
 def extract_reply(obj: dict) -> str:
-    # Try common shapes
     if isinstance(obj, dict):
         if isinstance(obj.get("reply"), str):
             return obj["reply"]
@@ -114,7 +217,6 @@ def extract_reply(obj: dict) -> str:
 
 
 def cmd_ps_8010() -> None:
-    # Windows-only: show who is listening on 8010 (helps detect zombies)
     if os.name != "nt":
         print("Jarvis> /ps działa tylko na Windows.")
         return
@@ -198,77 +300,89 @@ def main() -> int:
     print(f"Aktualny tryb: {mode}")
     log(f"CLI start API_URL={API_URL} mode={mode} DEBUG={DEBUG}")
 
-    while True:
-        try:
-            msg = input("Ty> ").strip()
-        except KeyboardInterrupt:
-            print("\nJarvis> Pa!")
-            log("CLI exit via Ctrl+C")
-            return 0
+    # start reminder watcher (MVP background reminders)
+    stop = threading.Event()
+    t = threading.Thread(target=reminder_watcher, args=(stop,), daemon=True)
+    t.start()
 
-        if not msg:
-            continue
-
-        low = msg.lower()
-
-        # --- local commands (not sent to API) ---
-        if low in ("/exit", "exit", "quit"):
-            print("Jarvis> Pa!")
-            log("CLI exit via /exit")
-            return 0
-
-        if low.startswith("/mode"):
-            parts = msg.split(maxsplit=1)
-            if len(parts) == 1:
-                print(f"Jarvis> Aktualny tryb: {mode}")
-            else:
-                new_mode = parts[1].strip().lower()
-                if new_mode in {"b2c", "pro"}:
-                    mode = new_mode
-                    print(f"Jarvis> ✅ Ustawiono tryb: {mode}")
-                    log(f"Mode changed to {mode}")
-                else:
-                    print("Jarvis> Dostępne tryby: b2c, pro")
-            continue
-
-        if low == "/diag":
-            cmd_diag(mode)
-            continue
-
-        if low == "/ps":
-            cmd_ps_8010()
-            continue
-
-        if low.startswith("/debug"):
-            parts = msg.split(maxsplit=1)
-            if len(parts) == 1:
-                print(f"Jarvis> DEBUG={'ON' if DEBUG else 'OFF'} (env: JARVIS_CLI_DEBUG)")
-            else:
-                val = parts[1].strip().lower()
-                new = val in {"1", "on", "true", "yes"}
-                os.environ["JARVIS_CLI_DEBUG"] = "1" if new else "0"
-                # NOTE: DEBUG is read at import time; we still show the intent
-                print(f"Jarvis> OK (następny start CLI): DEBUG={'ON' if new else 'OFF'}")
-            continue
-
-        # --- send to API ---
-        try:
-            resp = _post_chat(msg, mode=mode)
-            reply = extract_reply(resp)
-            print(f"Jarvis> {reply}")
-        except urllib.error.HTTPError as e:
-            body = ""
+    try:
+        while True:
             try:
-                body = e.read().decode("utf-8", errors="ignore")
-            except Exception:
-                pass
-            log(f"HTTPError {e.code} {e.reason} body={body[:500]!r}")
-            print(f"Jarvis> [HTTP {e.code}] {e.reason}")
-            if body:
-                print(body)
-        except Exception as e:
-            log(f"Request error: {e!r}\n{traceback.format_exc()}")
-            print(f"Jarvis> [ERR] {e}")
+                msg = input("Ty> ").strip()
+            except KeyboardInterrupt:
+                print("\nJarvis> Pa!")
+                log("CLI exit via Ctrl+C")
+                return 0
+
+            if not msg:
+                continue
+
+            low = msg.lower()
+
+            # --- local commands (not sent to API) ---
+            if low in ("/exit", "exit", "quit"):
+                print("Jarvis> Pa!")
+                log("CLI exit via /exit")
+                return 0
+
+            if low.startswith("/mode"):
+                parts = msg.split(maxsplit=1)
+                if len(parts) == 1:
+                    print(f"Jarvis> Aktualny tryb: {mode}")
+                else:
+                    new_mode = parts[1].strip().lower()
+                    if new_mode in {"b2c", "pro"}:
+                        mode = new_mode
+                        print(f"Jarvis> ✅ Ustawiono tryb: {mode}")
+                        log(f"Mode changed to {mode}")
+                    else:
+                        print("Jarvis> Dostępne tryby: b2c, pro")
+                continue
+
+            if low == "/diag":
+                cmd_diag(mode)
+                continue
+
+            if low == "/ps":
+                cmd_ps_8010()
+                continue
+
+            if low.startswith("/debug"):
+                parts = msg.split(maxsplit=1)
+                if len(parts) == 1:
+                    print(f"Jarvis> DEBUG={'ON' if DEBUG else 'OFF'} (env: JARVIS_CLI_DEBUG)")
+                else:
+                    val = parts[1].strip().lower()
+                    new = val in {"1", "on", "true", "yes"}
+                    os.environ["JARVIS_CLI_DEBUG"] = "1" if new else "0"
+                    print(f"Jarvis> OK (następny start CLI): DEBUG={'ON' if new else 'OFF'}")
+                continue
+
+            # --- send to API ---
+            try:
+                resp = _post_chat(msg, mode=mode)
+                reply = extract_reply(resp)
+                print(f"Jarvis> {reply}")
+            except urllib.error.HTTPError as e:
+                body = ""
+                try:
+                    body = e.read().decode("utf-8", errors="ignore")
+                except Exception:
+                    pass
+                log(f"HTTPError {e.code} {e.reason} body={body[:500]!r}")
+                print(f"Jarvis> [HTTP {e.code}] {e.reason}")
+                if body:
+                    print(body)
+            except Exception as e:
+                log(f"Request error: {e!r}\n{traceback.format_exc()}")
+                print(f"Jarvis> [ERR] {e}")
+    finally:
+        stop.set()
+        try:
+            t.join(timeout=1)
+        except Exception:
+            pass
+
 
 if __name__ == "__main__":
     raise SystemExit(main())

@@ -107,9 +107,108 @@ def load_tasks_db() -> Dict[str, Any]:
 def save_tasks_db(db: Dict[str, Any]) -> None:
     _save_json(TASKS_FILE, db)
 
+
+# --- Backwards-compatible API aliases (older parts of Jarvis import these names) ---
+
+def load_tasks():
+    """Compatibility wrapper.
+
+    Historically many parts of Jarvis treated the tasks store as a *list*.
+    Newer code stores a JSON object: {"tasks": [...]}. This function always
+    returns the list to avoid subtle bugs (e.g. iterating dict keys).
+    """
+    db = load_tasks_db()
+    tasks = db.get("tasks", [])
+    return tasks if isinstance(tasks, list) else []
+
+def save_tasks(db):
+    """Compatibility wrapper.
+
+    Accepts either a list of tasks or a full db dict.
+    """
+    if isinstance(db, dict):
+        return save_tasks_db(db)
+    if isinstance(db, list):
+        return save_tasks_db({"tasks": db})
+    # Defensive fallback
+    return save_tasks_db({"tasks": []})
+
+def pop_pending_reminder():
+    """Return and clear pending reminder (compat helper)."""
+    pending = get_pending_reminder()
+    if pending:
+        clear_pending_reminder()
+    return pending
+
 def _next_id(tasks: List[Dict[str, Any]]) -> int:
-    ids = [t.get("id") for t in tasks if isinstance(t.get("id"), int)]
-    return (max(ids) + 1) if ids else 1
+    """Smallest free positive integer id.
+
+    Re-uses gaps after deletions so the user sees ids 1..N whenever possible.
+    """
+    used = set()
+    for t in tasks:
+        try:
+            used.add(int(t.get("id")))
+        except Exception:
+            continue
+    i = 1
+    while i in used:
+        i += 1
+    return i
+
+
+_PR_RE = re.compile(r"^p\s*([1-5])$", re.IGNORECASE)
+
+
+def _parse_priority(token: str):
+    token = (token or "").strip().lower()
+    m = _PR_RE.match(token)
+    if not m:
+        return None
+    try:
+        return int(m.group(1))
+    except Exception:
+        return None
+
+
+def _parse_duration_minutes(token: str):
+    """Parse durations like: 30m, 90m, 1h, 1h30m, 1h 30m, 45min."""
+    tok = (token or "").strip().lower().replace("minutes", "min").replace("mins", "min")
+    tok = re.sub(r"\s+", "", tok)
+    if not tok:
+        return None
+    m = re.match(r"^(\d+)(?:m|min)$", tok)
+    if m:
+        return int(m.group(1))
+    m = re.match(r"^(\d+)h(?:(\d+)(?:m|min)?)?$", tok)
+    if m:
+        h = int(m.group(1))
+        mm = int(m.group(2) or 0)
+        return h * 60 + mm
+    return None
+
+
+def _strip_meta_tokens_from_title(title: str):
+    """Allow 'dentysta p1 30m' (no commas) and strip meta tokens from the end."""
+    if not title:
+        return "", None, None
+    words = title.strip().split()
+    pr = None
+    dur = None
+    while words:
+        w = words[-1]
+        p = _parse_priority(w)
+        if p is not None and pr is None:
+            pr = p
+            words.pop()
+            continue
+        d = _parse_duration_minutes(w)
+        if d is not None and dur is None:
+            dur = d
+            words.pop()
+            continue
+        break
+    return " ".join(words).strip(), pr, dur
 
 def add_task(raw: str) -> Dict[str, Any]:
     """Adds a task. Accepts optional travel mode anywhere in text."""
@@ -121,18 +220,37 @@ def add_task(raw: str) -> Dict[str, Any]:
     # normalize separators
     title = re.sub(r"\s+", " ", title).strip(" ,")
 
+    # Allow meta tokens even without commas: "... p1 30m"
+    title, pr_from_title, dur_from_title = _strip_meta_tokens_from_title(title)
+
     # if user wrote "... , samochodem" treat as travel mode and remove from title
     if travel:
         title = re.sub(rf"(?:,|\s)+{re.escape(travel)}\s*$", "", title, flags=re.IGNORECASE).strip(" ,")
 
-    # Optional location parsing: if user uses comma-separated format
-    # e.g. "dentysta, Niemcewicza 25, Warszawa" -> title="dentysta", location="Niemcewicza 25, Warszawa"
+    # Optional parsing: title, location..., p1, 30m
     location = None
+    priority = pr_from_title
+    duration_min = dur_from_title
     if "," in title:
         parts = [p.strip() for p in title.split(",") if p.strip()]
-        if len(parts) >= 2:
+        if parts:
             title = parts[0]
-            location = ", ".join(parts[1:])
+            loc_parts = []
+            for tok in parts[1:]:
+                p = _parse_priority(tok)
+                if p is not None and priority is None:
+                    priority = p
+                    continue
+                d = _parse_duration_minutes(tok)
+                if d is not None and duration_min is None:
+                    duration_min = d
+                    continue
+                loc_parts.append(tok)
+            if loc_parts:
+                location = ", ".join(loc_parts)
+
+    if priority is None:
+        priority = 2
 
     db = load_tasks_db()
     tasks = db["tasks"]
@@ -151,7 +269,9 @@ def add_task(raw: str) -> Dict[str, Any]:
         "due_at": due_at,
         "done": False,
         "tags": [],
-        "priority": None,
+        # normalized meta
+        "priority": int(priority) if priority is not None else 2,
+        "duration_min": int(duration_min) if duration_min is not None else None,
         "location": location,
         "reminder_at": None,
         "reminder_enabled": False,
@@ -167,18 +287,29 @@ def add_task(raw: str) -> Dict[str, Any]:
         reply += f" — dojazd: {travel}"
     return {"reply": reply, "task": task}
 
-def list_tasks_for_date(d: str) -> List[Dict[str, Any]]:
-    db = load_tasks_db()
-    out = []
-    for t in db["tasks"]:
-        due = (t.get("due_at") or "")
-        if due.startswith(d):
+def list_tasks_for_date(d) -> List[Dict[str, Any]]:
+    """List tasks for a specific date.
+
+    Accepts 'YYYY-MM-DD' string, datetime.date or datetime.datetime.
+    """
+    from datetime import date as _date, datetime as _datetime
+
+    if isinstance(d, _datetime):
+        d_str = d.date().isoformat()
+    elif isinstance(d, _date):
+        d_str = d.isoformat()
+    else:
+        d_str = str(d)
+
+    out: List[Dict[str, Any]] = []
+    for t in load_tasks():
+        if not isinstance(t, dict):
+            continue
+        due = str(t.get("due_at") or "")
+        if due.startswith(d_str):
             out.append(t)
-    # sort by time if present
-    def key(t):
-        due = t.get("due_at") or ""
-        return due
-    out.sort(key=key)
+
+    out.sort(key=lambda x: str(x.get("due_at") or ""))
     return out
 
 def get_task(task_id: int) -> Optional[Dict[str, Any]]:
@@ -276,6 +407,10 @@ def apply_travel_mode_to_pending(message: str) -> dict | None:
 
     msg = (message or "").strip().lower()
 
+    # Allow other commands to pass through even if travel selection is pending.
+    if msg in {"lista", "rano", "/ps", "/diag", "/debug on", "/debug off"} or msg.startswith("usuń") or msg.startswith("dodaj"):
+        return None
+
     # Accept both words and numeric shortcuts
     mode_map = {
         "1": "walking",
@@ -324,11 +459,74 @@ def apply_travel_mode_to_pending(message: str) -> dict | None:
             s = str(due_at).replace("T", " ")
             dt = datetime.fromisoformat(s)
             leave = dt - timedelta(minutes=travel_min + buffer_min)
+            # Store pending reminder so the router can accept "tak/nie".
+            set_pending_reminder(int(task_id), leave.isoformat(), created_from="travel_mode")
             leave_line = (
                 f"\n\n⏱️ Proponowane wyjście: **{leave.strftime('%H:%M')}** "
                 f"(dojazd ~{travel_min} min + {buffer_min} min zapasu)"
+                f"\n\nUstawić przypomnienie na **{leave.strftime('%H:%M')}**? (tak/nie)"
             )
     except Exception:
         pass
 
-    return {"reply": f"✅ Ustawione: {mode}.{leave_line}"}
+    human = {"walking": "pieszo", "transit": "komunikacją", "car": "samochodem"}.get(mode, mode)
+    return {"reply": f"✅ Ustawiono dojazd: {human}.{leave_line}"}
+
+
+# -----------------------------------------------------------------------------
+# Delete tasks (missing in some branches)
+# -----------------------------------------------------------------------------
+
+def delete_task_by_id(task_id: int) -> dict:
+    """Usuwa zadanie po ID.
+
+    Zwraca dict (ok/reply), żeby router mógł bezpiecznie zrobić out.get('reply').
+    """
+    try:
+        task_id = int(task_id)
+    except Exception:
+        return {"ok": False, "reply": "Podaj poprawne ID zadania (liczbę)."}
+
+    tasks = [t for t in load_tasks() if isinstance(t, dict)]
+    before = len(tasks)
+    tasks = [t for t in tasks if int(t.get("id", -1)) != task_id]
+
+    if len(tasks) == before:
+        return {"ok": False, "reply": f"Nie znalazłem zadania #{task_id}."}
+
+    save_tasks(tasks)
+
+    # jeśli usuwamy zadanie, które jest w pending travel / reminder → czyścimy
+    try:
+        pending = get_pending_travel()
+        if pending and int(pending.get("task_id", -1)) == task_id:
+            clear_pending_travel()
+    except Exception:
+        pass
+    try:
+        pr = get_pending_reminder()
+        if pr and int(pr.get("task_id", -1)) == task_id:
+            clear_pending_reminder()
+    except Exception:
+        pass
+
+    return {"ok": True, "reply": f"🗑️ Usunięto zadanie #{task_id}."}
+
+
+def delete_task(task_id: int) -> dict:
+    """Alias dla starszych wersji routera."""
+    return delete_task_by_id(task_id)
+
+
+def set_task_transport(task_id: int, transport: str) -> dict:
+    """Alias dla starszych wersji routera/testów."""
+    return apply_travel_mode_to_task_id(transport, int(task_id))
+
+
+# Dodatkowe aliasy zgodne z routerem (żeby nie wywalać 500)
+def set_reminder(task_id: int, reminder_at: str, enabled: bool = True) -> dict:
+    return set_task_reminder(int(task_id), reminder_at, enabled)
+
+
+def set_transport(task_id: int, transport: str) -> dict:
+    return set_task_transport(int(task_id), transport)
