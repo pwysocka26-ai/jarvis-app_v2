@@ -18,6 +18,37 @@ PRIORITY_EMOJI = {
 }
 
 
+SORT_PRIORITY = "priority"
+SORT_TIME = "time"
+
+def _get_sort_mode() -> str:
+    """Persisted sort mode stored in tasks DB under settings.sort_mode."""
+    try:
+        db = tasks_mod.load_tasks_db()
+        settings = db.get("settings", {}) if isinstance(db, dict) else {}
+        mode = settings.get("sort_mode")
+        if mode in {SORT_PRIORITY, SORT_TIME}:
+            return mode
+    except Exception:
+        pass
+    return SORT_PRIORITY
+
+def _set_sort_mode(mode: str) -> bool:
+    try:
+        db = tasks_mod.load_tasks_db()
+        if not isinstance(db, dict):
+            return False
+        settings = db.get("settings")
+        if not isinstance(settings, dict):
+            settings = {}
+            db["settings"] = settings
+        settings["sort_mode"] = mode
+        tasks_mod.save_tasks_db(db)
+        return True
+    except Exception:
+        return False
+
+
 def _as_reply(intent: str, reply: str, extra: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     out = {"intent": intent, "reply": reply, "response": reply}
     if extra:
@@ -59,25 +90,26 @@ def _parse_created_at(ts: Optional[str]) -> Optional[datetime]:
 def _sort_for_list(tasks: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     """Sortowanie używane w `lista`, `usuń` oraz numeracji LIVE przy `dodaj`.
 
-    Sterowanie po priorytecie:
-    1) Priorytet rosnąco (p1 najwyżej, potem p2, p3...).
-       - brak priorytetu traktujemy jak p2 (domyślne)
-    2) W obrębie tego samego priorytetu:
-       - zadania z godziną najpierw (chronologicznie),
-       - bez godziny na końcu (po created_at).
+    Tryby:
+    - priority (domyślnie): p1 najwyżej -> p2 -> p3..., potem czas
+    - time: tylko czas (zadania z godziną najpierw, potem bez godziny po created_at)
     """
-    def key(t: Dict[str, Any]):
-        # Priority: default p2
-        try:
-            pr = int(t.get("priority")) if t.get("priority") is not None else 2
-        except Exception:
-            pr = 2
+    mode = _get_sort_mode()
 
+    def key(t: Dict[str, Any]):
         time_min = _parse_time_to_minutes(t.get("time"))
         has_time = 0 if time_min is not None else 1
         created = _parse_created_at(t.get("created_at")) or datetime.max
         time_key = time_min if time_min is not None else 10**9
 
+        if mode == SORT_TIME:
+            return (has_time, time_key, created)
+
+        # SORT_PRIORITY (default): priority first
+        try:
+            pr = int(t.get("priority")) if t.get("priority") is not None else 2
+        except Exception:
+            pr = 2
         return (pr, has_time, time_key, created)
 
     return sorted([t for t in tasks if isinstance(t, dict)], key=key)
@@ -143,7 +175,27 @@ def route_intent(message: str, persona: str = "b2c", mode: Optional[str] = None,
             or t.startswith("help")
         )
 
+        # =============================
+    # SORT (przełączanie kolejności)
+    # sort priorytet | sort czas | sort
     # =============================
+    if low.startswith("sort"):
+        parts = low.split()
+        if len(parts) == 1:
+            mode = _get_sort_mode()
+            label = "priorytet" if mode == SORT_PRIORITY else "czas"
+            return _as_reply("sort_mode", f"Aktualne sortowanie: **{label}**. Ustaw: `sort priorytet` lub `sort czas`.")
+        if len(parts) >= 2:
+            arg = parts[1]
+            if arg in {"priorytet", "priority", "p"}:
+                ok = _set_sort_mode(SORT_PRIORITY)
+                return _as_reply("sort_mode", "✅ Ustawiono sortowanie: **priorytet**." if ok else "Nie udało się zapisać ustawienia sortowania.")
+            if arg in {"czas", "time", "t"}:
+                ok = _set_sort_mode(SORT_TIME)
+                return _as_reply("sort_mode", "✅ Ustawiono sortowanie: **czas**." if ok else "Nie udało się zapisać ustawienia sortowania.")
+        return _as_reply("sort_mode", "Użyj: `sort priorytet` albo `sort czas`.")
+
+# =============================
     # PRIORYTET (dla istniejącego zadania)
     # priorytet 2 p1
     # priorytet jutro 2 p3
