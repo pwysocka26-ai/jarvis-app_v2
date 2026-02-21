@@ -57,16 +57,29 @@ def _parse_created_at(ts: Optional[str]) -> Optional[datetime]:
 
 
 def _sort_for_list(tasks: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-    """Spójne sortowanie jak dotychczas:
-    - zadania z godziną najpierw (chronologicznie),
-    - bez godziny na końcu (po created_at).
+    """Sortowanie używane w `lista`, `usuń` oraz numeracji LIVE przy `dodaj`.
+
+    Sterowanie po priorytecie:
+    1) Priorytet rosnąco (p1 najwyżej, potem p2, p3...).
+       - brak priorytetu traktujemy jak p2 (domyślne)
+    2) W obrębie tego samego priorytetu:
+       - zadania z godziną najpierw (chronologicznie),
+       - bez godziny na końcu (po created_at).
     """
     def key(t: Dict[str, Any]):
+        # Priority: default p2
+        try:
+            pr = int(t.get("priority")) if t.get("priority") is not None else 2
+        except Exception:
+            pr = 2
+
         time_min = _parse_time_to_minutes(t.get("time"))
         has_time = 0 if time_min is not None else 1
         created = _parse_created_at(t.get("created_at")) or datetime.max
         time_key = time_min if time_min is not None else 10**9
-        return (has_time, time_key, created)
+
+        return (pr, has_time, time_key, created)
+
     return sorted([t for t in tasks if isinstance(t, dict)], key=key)
 
 
