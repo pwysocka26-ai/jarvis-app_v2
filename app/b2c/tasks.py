@@ -11,6 +11,7 @@ from typing import Any, Dict, List, Optional, Tuple
 DATA_DIR = Path("data/memory")
 TASKS_FILE = DATA_DIR / "tasks.json"
 PENDING_TRAVEL_FILE = DATA_DIR / "pending_travel.json"
+PENDING_CLEAR_FILE = DATA_DIR / "pending_clear.json"
 PENDING_REMINDER_FILE = DATA_DIR / "pending_reminder.json"
 
 # --- Travel mode parsing ---
@@ -189,7 +190,11 @@ def _parse_duration_minutes(token: str):
 
 
 def _strip_meta_tokens_from_title(title: str):
-    """Allow 'dentysta p1 30m' (no commas) and strip meta tokens from the end."""
+    """Allow 'dentysta p1 30m' (no commas) and strip meta tokens from the end.
+
+    If multiple meta tokens are present (e.g. 'p2 p1'), we strip *all* of them and
+    keep the last one as the effective value (closest to the end of the input).
+    """
     if not title:
         return "", None, None
     words = title.strip().split()
@@ -198,13 +203,13 @@ def _strip_meta_tokens_from_title(title: str):
     while words:
         w = words[-1]
         p = _parse_priority(w)
-        if p is not None and pr is None:
-            pr = p
+        if p is not None:
+            pr = p  # overwrite to support '... p2 p1'
             words.pop()
             continue
         d = _parse_duration_minutes(w)
-        if d is not None and dur is None:
-            dur = d
+        if d is not None:
+            dur = d  # overwrite to support duplicates
             words.pop()
             continue
         break
@@ -217,6 +222,9 @@ def add_task(raw: str) -> Dict[str, Any]:
 
     due_date, due_time, rest = _parse_date_time_polish(raw)
     title = rest.strip()
+    # Defensive: strip command prefix if it leaked into the title
+    title = re.sub(r"^\s*[-•]*\s*(dodaj|add)\s*:?\s*", "", title, flags=re.I)
+
     # normalize separators
     title = re.sub(r"\s+", " ", title).strip(" ,")
 
@@ -238,12 +246,12 @@ def add_task(raw: str) -> Dict[str, Any]:
             loc_parts = []
             for tok in parts[1:]:
                 p = _parse_priority(tok)
-                if p is not None and priority is None:
-                    priority = p
+                if p is not None:
+                    priority = p  # overwrite to prevent 'p2 p1' leaking into location
                     continue
                 d = _parse_duration_minutes(tok)
-                if d is not None and duration_min is None:
-                    duration_min = d
+                if d is not None:
+                    duration_min = d  # overwrite to prevent duplicates leaking into location
                     continue
                 loc_parts.append(tok)
             if loc_parts:
@@ -271,6 +279,7 @@ def add_task(raw: str) -> Dict[str, Any]:
         "tags": [],
         # normalized meta
         "priority": int(priority) if priority is not None else 2,
+        "priority_explicit": True if pr_from_title is not None else (True if "," in (rest or "") and re.search(r"\bp[1-3]\b", (raw or ""), re.I) else False),
         "duration_min": int(duration_min) if duration_min is not None else None,
         "location": location,
         "reminder_at": None,
@@ -287,6 +296,59 @@ def add_task(raw: str) -> Dict[str, Any]:
         reply += f" — dojazd: {travel}"
     return {"reply": reply, "task": task}
 
+
+# --- Sorting utilities (single source of truth) ---
+
+def _parse_time_to_minutes(time_str: str | None) -> int | None:
+    if not time_str:
+        return None
+    try:
+        h, m = time_str.split(":")
+        return int(h) * 60 + int(m)
+    except Exception:
+        return None
+
+
+def _task_time_str(task: Dict[str, Any]) -> str | None:
+    # supports both legacy 'time' and ISO 'due_at'
+    if task.get("time"):
+        return str(task.get("time"))[:5]
+    due_at = task.get("due_at")
+    if isinstance(due_at, str) and "T" in due_at:
+        return due_at.split("T")[1][:5]
+    return None
+
+
+def sort_for_list(tasks: List[Dict[str, Any]], mode: str = "time") -> List[Dict[str, Any]]:
+    """Sort tasks for displaying in 'lista' and for live numbering.
+
+    mode:
+      - 'time' (default): time axis first; priority only breaks ties within the same time.
+      - 'priority': priority first; then time.
+    """
+    mode = (mode or "time").strip().lower()
+    if mode not in {"time", "priority"}:
+        mode = "time"
+
+    def key_time_axis(t: Dict[str, Any]):
+        time_min = _parse_time_to_minutes(_task_time_str(t))
+        has_time = 0 if time_min is not None else 1
+        # default priority is 3 (lowest)
+        pr = int(t.get("priority") or 3)
+        created = str(t.get("created_at") or "")
+        # Time axis is sacred: priority never moves across different times.
+        return (has_time, time_min if time_min is not None else 9999, pr, created)
+
+    def key_priority_first(t: Dict[str, Any]):
+        pr = int(t.get("priority") or 3)
+        time_min = _parse_time_to_minutes(_task_time_str(t))
+        has_time = 0 if time_min is not None else 1
+        created = str(t.get("created_at") or "")
+        return (pr, has_time, time_min if time_min is not None else 9999, created)
+
+    return sorted(tasks, key=key_time_axis if mode == "time" else key_priority_first)
+
+# --- End sorting utilities ---
 def list_tasks_for_date(d) -> List[Dict[str, Any]]:
     """List tasks for a specific date.
 
@@ -309,7 +371,21 @@ def list_tasks_for_date(d) -> List[Dict[str, Any]]:
         if due.startswith(d_str):
             out.append(t)
 
-    out.sort(key=lambda x: str(x.get("due_at") or ""))
+    def _sort_key(t: Dict[str, Any]):
+        due = str(t.get("due_at") or "")
+        # For a given date list, due is either 'YYYY-MM-DD' or 'YYYY-MM-DDTHH:MM'
+        has_time = 0 if "T" in due else 1
+        time_part = ""
+        if "T" in due:
+            time_part = due.split("T", 1)[1]
+        # Priority: p1 first
+        pr = t.get("priority", 2)
+        try:
+            pr = int(pr)
+        except Exception:
+            pr = 2
+        return (has_time, time_part, pr, int(t.get("id") or 0))
+    out.sort(key=_sort_key)
     return out
 
 def get_task(task_id: int) -> Optional[Dict[str, Any]]:
@@ -368,6 +444,42 @@ def clear_pending_reminder() -> None:
             PENDING_REMINDER_FILE.unlink()
         except Exception:
             _save_json(PENDING_REMINDER_FILE, None)
+
+
+def set_pending_clear(date_iso: str):
+    data = {"date": date_iso, "created_at": _now_iso()}
+    _atomic_write_json(PENDING_CLEAR_FILE, data)
+    return data
+
+def get_pending_clear():
+    if not PENDING_CLEAR_FILE.exists():
+        return None
+    try:
+        return _read_json(PENDING_CLEAR_FILE)
+    except Exception:
+        return None
+
+def clear_pending_clear():
+    try:
+        if PENDING_CLEAR_FILE.exists():
+            PENDING_CLEAR_FILE.unlink()
+    except Exception:
+        pass
+
+def clear_tasks_for_date(date_iso: str) -> int:
+    """Remove all tasks whose due_at starts with YYYY-MM-DD. Returns removed count."""
+    db = load_tasks_db()
+    tasks_list = db.get("tasks", [])
+    before = len(tasks_list)
+    remaining = []
+    for t in tasks_list:
+        due_at = (t.get("due_at") or "").strip()
+        if due_at.startswith(date_iso):
+            continue
+        remaining.append(t)
+    db["tasks"] = remaining
+    save_tasks_db(db)
+    return before - len(remaining)
 
 def parse_yes_no(text: str) -> Optional[bool]:
     low = (text or "").strip().lower()
@@ -444,33 +556,9 @@ def apply_travel_mode_to_pending(message: str) -> dict | None:
     if not ok:
         return {"reply": "Nie udało się ustawić trybu dojazdu dla tego zadania."}
 
-    # MVP: prosty, deterministyczny szacunek czasu wyjścia (bez zewnętrznych API)
-    task = get_task(int(task_id)) or {}
-    due_at = task.get("due_at")
-
-    mins_by_mode = {"walking": 60, "transit": 40, "car": 25}
-    travel_min = mins_by_mode.get(mode, 30)
-    buffer_min = 10
-
-    leave_line = ""
-    try:
-        from datetime import datetime, timedelta
-        if due_at:
-            s = str(due_at).replace("T", " ")
-            dt = datetime.fromisoformat(s)
-            leave = dt - timedelta(minutes=travel_min + buffer_min)
-            # Store pending reminder so the router can accept "tak/nie".
-            set_pending_reminder(int(task_id), leave.isoformat(), created_from="travel_mode")
-            leave_line = (
-                f"\n\n⏱️ Proponowane wyjście: **{leave.strftime('%H:%M')}** "
-                f"(dojazd ~{travel_min} min + {buffer_min} min zapasu)"
-                f"\n\nUstawić przypomnienie na **{leave.strftime('%H:%M')}**? (tak/nie)"
-            )
-    except Exception:
-        pass
-
     human = {"walking": "pieszo", "transit": "komunikacją", "car": "samochodem"}.get(mode, mode)
-    return {"reply": f"✅ Ustawiono dojazd: {human}.{leave_line}"}
+    return {"reply": f"✅ Ustawiono dojazd: {human}."}
+
 
 
 # -----------------------------------------------------------------------------
@@ -530,3 +618,4 @@ def set_reminder(task_id: int, reminder_at: str, enabled: bool = True) -> dict:
 
 def set_transport(task_id: int, transport: str) -> dict:
     return set_task_transport(int(task_id), transport)
+

@@ -1,11 +1,9 @@
-from __future__ import annotations
-
-from typing import Any, Dict
-
 from app.intent.router import route_intent
 
-def handle_chat(message: str, *, mode: str | None = None) -> Dict[str, Any]:
-    return route_intent(message, mode=mode)
-    
-import app.intent.router
-print("### core.py uses intent.router FILE ###", app.intent.router.__file__)
+def handle_chat(message: str, mode: str = "b2c") -> str:
+    # Compatibility: router implementations may accept `mode=` or only `persona=`.
+    try:
+        return route_intent(message, mode=mode)
+    except TypeError:
+        # Older router signature: route_intent(message, persona="b2c")
+        return route_intent(message, persona=mode)

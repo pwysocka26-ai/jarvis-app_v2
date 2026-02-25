@@ -21,7 +21,8 @@ CLI_TIMEOUT_S = float(os.getenv("CLI_TIMEOUT_S", "180"))
 DEBUG = (os.getenv("JARVIS_CLI_DEBUG", "1").strip() in {"1", "true", "True", "YES", "yes"})
 REMINDER_POLL_S = float(os.getenv("JARVIS_REMINDER_POLL_S", "10"))
 
-TASKS_FILE = Path("data/memory/tasks.json")
+BASE_DIR = Path(__file__).resolve().parents[1]  # .../Jarvis4
+TASKS_FILE = BASE_DIR / "data" / "memory" / "tasks.json"
 
 
 # ==========================
