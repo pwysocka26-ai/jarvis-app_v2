@@ -1,13 +1,19 @@
+# ROUTER_BUILD: late_pred_A_buf10
 from __future__ import annotations
 
 from typing import Any, Dict, Optional, List, Tuple
 import os
 import re
+import math
 from datetime import date, datetime, timedelta
 
 from app.b2c import tasks as tasks_mod
 from app.b2c.travel_mode import morning_brief
 from app.b2c.maps_google import get_eta_minutes
+
+
+# Travel configuration (MVP)
+TRAVEL_BUFFER_MIN = 10  # safety buffer (minutes)
 
 YES = {"tak", "t", "yes", "y", "ok", "jasne", "pewnie"}
 NO = {"nie", "n", "no"}
@@ -332,6 +338,65 @@ def route_intent(message: str, persona: str = "b2c", mode: Optional[str] = None,
         pretty = {"samochod":"samochód", "autobus":"autobus", "rower":"rower", "pieszo":"pieszo"}[mode_norm]
         return _as_reply("set_travel_mode", f"✅ Ustawiono tryb: {pretty}.")
 
+
+
+    if low in {"czy zdążę", "czy zdzaze", "spóźnię się?", "spoznie sie?", "spoznie sie", "spóźnię się", "czy sie spoznie", "czy się spóźnię"}:
+        today = date.today()
+        tasks = _sort_for_list(tasks_mod.list_tasks_for_date(today) or [])
+        # only tasks that have both time and location
+        cand = []
+        for t in tasks:
+            if not isinstance(t, dict):
+                continue
+            due_at = str(t.get("due_at") or "")
+            if "T" not in due_at:
+                continue
+            if not (t.get("location") or t.get("place")):
+                continue
+            cand.append(t)
+
+        if not cand:
+            return _as_reply("late_check", "Nie mam dziś zadania z godziną i adresem. Dodaj np. `dodaj: dentysta dziś 18:30 Narbutta 86, Warszawa`.")
+
+        t = cand[0]
+        destination = str(t.get("location") or t.get("place") or "").strip()
+        origin = _get_origin_address()
+        if not origin:
+            return _as_reply("late_check", "Skąd ruszasz? Ustaw `ustaw dom: ...` albo `tu jestem: ...`.")
+
+        travel_mode = str(t.get("travel_mode") or _get_place("travel_mode_default") or "samochod")
+        mins = _mvp_eta_minutes(travel_mode)
+
+        due_at = str(t.get("due_at") or "")
+        try:
+            dt = datetime.fromisoformat(due_at.replace("Z", "+00:00"))
+            if dt.tzinfo is not None:
+                dt = dt.astimezone().replace(tzinfo=None)
+        except Exception:
+            return _as_reply("late_check", "Nie potrafię odczytać godziny tego zadania.")
+
+        now = datetime.now()
+        deadline = dt - timedelta(minutes=mins + TRAVEL_BUFFER_MIN)
+        delta = deadline - now
+
+        pretty = {"samochod":"samochód", "autobus":"autobus", "rower":"rower", "pieszo":"pieszo"}.get(_normalize_travel_mode(travel_mode) or "samochod", "samochód")
+        leave_hhmm = deadline.strftime("%H:%M")
+
+        # minutes as integers
+        mins_left = int(math.ceil(delta.total_seconds() / 60.0))
+        if delta.total_seconds() >= 0:
+            return _as_reply(
+                "late_check",
+                f"✅ Zdążysz. Masz jeszcze **{mins_left} min**.\nWyjdź o **{leave_hhmm}** (bufor {TRAVEL_BUFFER_MIN} min).\nETA ({pretty}): {mins} min\n{origin} → {destination}",
+            )
+
+        late_by = int(math.ceil((now - deadline).total_seconds() / 60.0))
+        return _as_reply(
+            "late_check",
+            f"⏰ Powinnaś wyjść **{late_by} min temu**.\nSpóźnisz się około **{late_by} min** (przy stałym ETA).\nWyjdź teraz.\nETA ({pretty}): {mins} min\n{origin} → {destination}",
+        )
+
+
     if low.startswith("eta"):
         # eta or eta <nr>
         parts = (message or "").strip().split()
@@ -376,8 +441,8 @@ def route_intent(message: str, persona: str = "b2c", mode: Optional[str] = None,
                 dt = datetime.fromisoformat(due_at.replace("Z","+00:00"))
                 if dt.tzinfo is not None:
                     dt = dt.astimezone().replace(tzinfo=None)
-                leave_dt = dt - timedelta(minutes=mins + 5)
-                leave_line = f"\nWyjdź o **{leave_dt.strftime('%H:%M')}** (bufor 5 min)."
+                leave_dt = dt - timedelta(minutes=mins + TRAVEL_BUFFER_MIN)
+                leave_line = f"\nWyjdź o **{leave_dt.strftime('%H:%M')}** (bufor {TRAVEL_BUFFER_MIN} min)."
             except Exception:
                 leave_line = ""
 
