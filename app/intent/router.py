@@ -33,6 +33,34 @@ PRIORITY_EMOJI = {
     3: "🟢",  # p3
 }
 
+def _priority_emoji(priority: object, explicit: bool) -> str:
+    """Return emoji prefix for priority.
+
+    Rules:
+    - p1: always shown
+    - p2: shown only when explicitly set (priority_explicit=True)
+    - p3: always shown
+    - other priorities: shown as pN (with same explicit rule for p2)
+    """
+    pr = None
+    try:
+        if priority is not None:
+            pr = int(priority)
+    except Exception:
+        pr = None
+
+    if pr is None:
+        return ""
+
+    if pr == 2 and not explicit:
+        return ""
+
+    if pr in PRIORITY_EMOJI:
+        return PRIORITY_EMOJI[pr] + " "
+
+    return f"p{pr} "
+
+
 
 def _task_time_str(t: Dict[str, Any]) -> str:
     """Return HH:MM if task has a concrete due time."""

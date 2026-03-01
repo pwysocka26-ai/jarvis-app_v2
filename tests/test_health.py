@@ -3,7 +3,7 @@ from app.main import app
 
 client = TestClient(app)
 
-def test_health_includes_ids():
+def test_health_v1_includes_ids():
     r = client.get("/v1/health")
     assert r.status_code == 200
     data = r.json()
