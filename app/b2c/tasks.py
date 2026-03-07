@@ -65,58 +65,6 @@ def parse_travel_mode(text: str) -> Optional[str]:
             return v
     return None
 
-def parse_add_command(text: str) -> Optional[str]:
-    """Parse simple add-task commands.
-
-    Expected forms (case-insensitive):
-      - "dodaj <treść>"
-      - "add <content>"
-      - "task <content>"
-
-    Returns the extracted content or None if the text is not an add command.
-    This function exists primarily as a stable module contract for tests and
-    older Jarvis flows.
-    """
-    if not text:
-        return None
-    t = text.strip()
-    m = re.match(r"^(?:dodaj|add|task)\s+(.+)$", t, flags=re.IGNORECASE)
-    if not m:
-        return None
-    return m.group(1).strip()
-
-
-def _ensure_dirs() -> None:
-    """Ensure required storage directories/files parents exist.
-
-    Tests patch DATA_DIR / TASKS_FILE / PENDING_* paths and then call this
-    helper to make sure the temp directory exists before reading/writing.
-    """
-    global DATA_DIR, TASKS_FILE, PENDING_TRAVEL_FILE, PENDING_CLEAR_FILE, PENDING_REMINDER_FILE, PENDING_CHECKLIST_FILE
-
-    # Normalize to Path where possible (tests may assign Path already)
-    if not isinstance(DATA_DIR, Path):
-        DATA_DIR = Path(str(DATA_DIR))
-
-    # Create base dir
-    DATA_DIR.mkdir(parents=True, exist_ok=True)
-
-    # Ensure parents for any known files (robust to reassignment)
-    for p in [TASKS_FILE, PENDING_TRAVEL_FILE, PENDING_CLEAR_FILE, PENDING_REMINDER_FILE, PENDING_CHECKLIST_FILE]:
-        try:
-            if not isinstance(p, Path):
-                p = Path(str(p))
-            p.parent.mkdir(parents=True, exist_ok=True)
-        except Exception:
-            # If something is unexpectedly not path-like, ignore here; file ops will surface errors.
-            pass
-
-
-# Public alias (some callers may prefer the pluralized name)
-def ensure_dirs() -> None:
-    _ensure_dirs()
-
-
 def _parse_date_time_polish(text: str) -> Tuple[Optional[str], Optional[str], str]:
     """
     Very small parser for phrases like:
@@ -198,40 +146,6 @@ def pop_pending_reminder():
         clear_pending_reminder()
     return pending
 
-# --- Pending checklist capture (CLI line-by-line) ---
-def get_pending_checklist() -> Optional[Dict[str, Any]]:
-    """Return pending checklist capture state or None.
-
-    State shape:
-      { "task_id": int|None, "title": str, "items": [str, ...] }
-    """
-    data = _load_json(PENDING_CHECKLIST_FILE, default=None)
-    if not isinstance(data, dict):
-        return None
-    # task_id can be int or None
-    tid = data.get("task_id")
-    if tid is not None and not isinstance(tid, int):
-        return None
-    title = data.get("title")
-    if title is not None and not isinstance(title, str):
-        return None
-    items = data.get("items")
-    if items is not None and not isinstance(items, list):
-        return None
-    return data
-
-
-def set_pending_checklist(state: Optional[Dict[str, Any]]) -> None:
-    """Set or clear pending checklist capture state."""
-    if state is None:
-        if PENDING_CHECKLIST_FILE.exists():
-            try:
-                PENDING_CHECKLIST_FILE.unlink()
-            except Exception:
-                _save_json(PENDING_CHECKLIST_FILE, None)
-        return
-    _save_json(PENDING_CHECKLIST_FILE, state)
-
 def _next_id(tasks: List[Dict[str, Any]]) -> int:
     """Smallest free positive integer id.
 
@@ -308,57 +222,33 @@ def _strip_meta_tokens_from_title(title: str):
 
 
 
-# --- Stable heuristic: infer location from titles without commas ---
 def _infer_location_from_title(title: str) -> Tuple[str, Optional[str]]:
-    """
-    Best-effort split for inputs like:
-      "dentysta Narbutta 86 Warszawa"
-      "spotkanie ul. Marszałkowska 10 Warszawa"
-      "zrób zakupy w biedronce ul. Narbutta 86 Warszawa"
-
-    Returns (clean_title, location_or_none).
-    """
     raw = (title or "").strip()
     if not raw:
         return raw, None
-
     tokens = raw.split()
     if len(tokens) < 3:
         return raw, None
-
     digit_idx = None
     for i, tok in enumerate(tokens):
         if re.search(r"\d", tok):
             digit_idx = i
             break
-
     if digit_idx is None:
         return raw, None
-
-    # Usually location starts one token before the house number.
-    start = max(0, digit_idx - 1)
+    start = max(1, digit_idx - 1)
     street_markers = {"ul", "ul.", "al", "al.", "aleje", "pl", "pl.", "plac", "os", "os.", "osiedle"}
-
     if start - 1 >= 0 and tokens[start - 1].lower() in street_markers:
         start -= 1
-
-    if start <= 0:
-        return raw, None
-
     title_part = " ".join(tokens[:start]).strip(" ,")
     loc_part = " ".join(tokens[start:]).strip(" ,")
-
     if not title_part or not loc_part or not re.search(r"\d", loc_part):
         return raw, None
-
     return title_part, loc_part
 
 def add_task(raw: str) -> Dict[str, Any]:
     """Adds a task. Accepts optional travel mode anywhere in text."""
     raw = (raw or "").strip()
-    low = raw.lower()
-    if low.startswith("zapamiętaj") or low.startswith("zapamietaj") or low.startswith("pamięć") or low.startswith("pamiec") or low.startswith("co pamiętasz") or low.startswith("co pamietasz") or low.startswith("gdzie mieszkam") or low.startswith("zapomnij"):
-        return {"reply": "To jest komenda pamięci, nie zadanie.", "task": None, "ignored": True}
     travel = parse_travel_mode(raw)
 
     due_date, due_time, rest = _parse_date_time_polish(raw)
@@ -398,9 +288,6 @@ def add_task(raw: str) -> Dict[str, Any]:
             if loc_parts:
                 location = ", ".join(loc_parts)
     else:
-        # Address without comma:
-        # "dentysta Narbutta 86 Warszawa" -> title="dentysta", location="Narbutta 86 Warszawa"
-        # "zrób zakupy w biedronce ul. Narbutta 86 Warszawa" -> title="zrób zakupy w biedronce", location="ul. Narbutta 86 Warszawa"
         title, inferred_location = _infer_location_from_title(title)
         if inferred_location:
             location = inferred_location
@@ -437,12 +324,20 @@ def add_task(raw: str) -> Dict[str, Any]:
     tasks.append(task)
     save_tasks_db(db)
 
+    try:
+        due_has_time = bool((task.get("time") or "").strip()) or ("T" in str(task.get("due_at") or ""))
+        has_location = bool((task.get("location") or task.get("location_text") or task.get("address") or "").strip())
+        if due_has_time and has_location:
+            set_pending_travel(task_id, created_from="add")
+    except Exception:
+        pass
+
     reply = f"✅ Dodane zadanie #{task_id}: {task['title']}"
     if due_at:
         reply += f" (na {due_at.replace('T', ' ')})"
     if travel:
         reply += f" — dojazd: {travel}"
-    return {"id": task_id, "reply": reply, "task": task}
+    return {"reply": reply, "task": task}
 
 
 # --- Sorting utilities (single source of truth) ---
@@ -536,6 +431,147 @@ def list_tasks_for_date(d) -> List[Dict[str, Any]]:
     out.sort(key=_sort_key)
     return out
 
+
+
+# --- Pending checklist (attach line-by-line list to a task) ---
+def get_pending_checklist() -> Optional[Dict[str, Any]]:
+    data = _load_json(PENDING_CHECKLIST_FILE, default=None)
+    if not isinstance(data, dict):
+        return None
+    if not isinstance(data.get("task_id"), int):
+        return None
+    return data
+
+def set_pending_checklist(task_id: int, *, title: str = "Lista") -> None:
+    _save_json(PENDING_CHECKLIST_FILE, {"task_id": int(task_id), "title": str(title or "Lista"), "created_at": _now_iso()})
+
+def clear_pending_checklist() -> None:
+    if PENDING_CHECKLIST_FILE.exists():
+        try:
+            PENDING_CHECKLIST_FILE.unlink()
+        except Exception:
+            _save_json(PENDING_CHECKLIST_FILE, None)
+
+def get_last_task() -> Optional[Dict[str, Any]]:
+    db = load_tasks_db()
+    tasks = db.get("tasks", [])
+    if not isinstance(tasks, list) or not tasks:
+        return None
+    # prefer highest numeric id
+    ordered = []
+    for t in tasks:
+        try:
+            ordered.append((int(t.get("id") or 0), t))
+        except Exception:
+            continue
+    if not ordered:
+        return None
+    ordered.sort(key=lambda x: x[0])
+    return ordered[-1][1]
+
+def add_checklist_item_to_task(task_id: int, text: str) -> Optional[Dict[str, Any]]:
+    text = (text or "").strip().lstrip("-").strip()
+    if not text:
+        return None
+    db = load_tasks_db()
+    for t in db["tasks"]:
+        if t.get("id") == task_id:
+            cl = t.get("checklist")
+            if not isinstance(cl, dict):
+                cl = {"title": "Lista", "items": []}
+                t["checklist"] = cl
+            items = cl.get("items")
+            if not isinstance(items, list):
+                items = []
+                cl["items"] = items
+            items.append({"text": text, "done": False})
+            save_tasks_db(db)
+            return t
+    return None
+
+def set_checklist_title(task_id: int, title: str) -> Optional[Dict[str, Any]]:
+    title = (title or "").strip().rstrip(":") or "Lista"
+    db = load_tasks_db()
+    for t in db["tasks"]:
+        if t.get("id") == task_id:
+            cl = t.get("checklist")
+            if not isinstance(cl, dict):
+                cl = {"title": title, "items": []}
+                t["checklist"] = cl
+            cl["title"] = title
+            save_tasks_db(db)
+            return t
+    return None
+
+def toggle_checklist_item(task_id: int, item_no: int, done: bool) -> Optional[Dict[str, Any]]:
+    db = load_tasks_db()
+    for t in db["tasks"]:
+        if t.get("id") == task_id:
+            cl = t.get("checklist")
+            if not isinstance(cl, dict):
+                return None
+            items = cl.get("items")
+            if not isinstance(items, list) or not (1 <= item_no <= len(items)):
+                return None
+            it = items[item_no - 1]
+            if isinstance(it, dict):
+                it["done"] = bool(done)
+            else:
+                items[item_no - 1] = {"text": str(it), "done": bool(done)}
+            save_tasks_db(db)
+            return t
+    return None
+
+def add_checklist_item_manual(task_id: int, text: str) -> Optional[Dict[str, Any]]:
+    return add_checklist_item_to_task(task_id, text)
+
+def remove_checklist_item_manual(task_id: int, text: str) -> Optional[Dict[str, Any]]:
+    target = (text or "").strip().lower()
+    if not target:
+        return None
+    db = load_tasks_db()
+    for t in db["tasks"]:
+        if t.get("id") == task_id:
+            cl = t.get("checklist")
+            if not isinstance(cl, dict):
+                return None
+            items = cl.get("items")
+            if not isinstance(items, list):
+                return None
+            new_items = []
+            removed = False
+            for it in items:
+                txt = (it.get("text") if isinstance(it, dict) else str(it) or "").strip()
+                if not removed and txt.lower() == target:
+                    removed = True
+                    continue
+                new_items.append(it)
+            if removed:
+                cl["items"] = new_items
+                save_tasks_db(db)
+                return t
+            return None
+    return None
+
+
+
+def replace_task_checklist(task_id: int, title: str, items_raw: list[str]) -> Optional[Dict[str, Any]]:
+    """Replace whole checklist on a task from a comma-separated command."""
+    title = (title or "").strip().rstrip(":") or "Lista"
+    cleaned: list[Dict[str, Any]] = []
+    for it in (items_raw or []):
+        txt = str(it).strip().lstrip("-").strip()
+        if txt:
+            cleaned.append({"text": txt, "done": False})
+
+    db = load_tasks_db()
+    for t in db["tasks"]:
+        if t.get("id") == task_id:
+            t["checklist"] = {"title": title, "items": cleaned}
+            save_tasks_db(db)
+            return t
+    return None
+
 def get_task(task_id: int) -> Optional[Dict[str, Any]]:
     db = load_tasks_db()
     for t in db["tasks"]:
@@ -570,15 +606,6 @@ def clear_pending_travel() -> None:
             PENDING_TRAVEL_FILE.unlink()
         except Exception:
             _save_json(PENDING_TRAVEL_FILE, None)
-
-
-
-def clear_pending_transport() -> None:
-    """Alias for clearing pending travel/transport selection.
-
-    Some flows/tests refer to 'transport' while storage uses pending_travel.
-    """
-    clear_pending_travel()
 
 
 # --- Pending reminder (yes/no) ---
@@ -775,3 +802,4 @@ def set_reminder(task_id: int, reminder_at: str, enabled: bool = True) -> dict:
 
 def set_transport(task_id: int, transport: str) -> dict:
     return set_task_transport(int(task_id), transport)
+
