@@ -142,6 +142,20 @@ def _get_place(key: str) -> Optional[str]:
     return str(v).strip() if isinstance(v, str) and v.strip() else None
 
 
+
+def _memory_home_fallback() -> Optional[str]:
+    try:
+        from app.memory.factory import get_memory_store
+        store = get_memory_store("default")
+        facts = store.list_facts() if hasattr(store, "list_facts") else []
+        for fact in reversed([str(x).strip() for x in facts if str(x).strip()]):
+            low = fact.lower()
+            if low.startswith("mieszkam ") or "mieszkam przy" in low or "mój adres" in low or "moj adres" in low:
+                return fact
+    except Exception:
+        pass
+    return None
+
 def _get_origin_address() -> Optional[str]:
     """Resolve origin based on selected origin_mode, with fallback:
     tu -> dom -> praca
@@ -157,20 +171,25 @@ def _get_origin_address() -> Optional[str]:
         home = _get_place("origin_home")
         if home:
             return home
+        mem_home = _memory_home_fallback()
+        if mem_home:
+            return mem_home
         return _get_place("origin_work")
 
     if mode == ORIGIN_WORK:
         work = _get_place("origin_work")
         if work:
             return work
-        return _get_place("origin_home")
+        return _get_place("origin_home") or _memory_home_fallback()
 
     # ORIGIN_HOME
     home = _get_place("origin_home")
     if home:
         return home
+    mem_home = _memory_home_fallback()
+    if mem_home:
+        return mem_home
     return _get_place("origin_work")
-
 
 
 
@@ -178,11 +197,11 @@ def _resolve_origin_from_answer(ans: str) -> Tuple[str, Optional[str]]:
     raw = (ans or "").strip()
     low = raw.lower()
     if low in {"dom", "home"}:
-        return ORIGIN_HOME, _get_place("origin_home")
+        return ORIGIN_HOME, _get_place("origin_home") or _memory_home_fallback()
     if low in {"praca", "work"}:
         return ORIGIN_WORK, _get_place("origin_work")
     if low in {"tu", "tutaj", "obecna", "obecna lokalizacja"}:
-        return ORIGIN_CURRENT, _get_place("origin_current") or _get_place("origin_home") or _get_place("origin_work")
+        return ORIGIN_CURRENT, _get_place("origin_current") or _get_place("origin_home") or _memory_home_fallback() or _get_place("origin_work")
     return ORIGIN_CUSTOM, raw
 
 # -----------------------------
@@ -322,11 +341,6 @@ def route_intent(message: str, persona: str = "b2c", mode: Optional[str] = None,
             or t.startswith("zapamietaj")
             or t.startswith("zapomnij")
             or t.startswith("gdzie ")
-            or t.startswith("plan dnia")
-            or t.startswith("co dziś")
-            or t.startswith("co dzis")
-            or t.startswith("dzisiaj")
-            or t.startswith("dziś")
         )
 
     # =============================
@@ -347,21 +361,6 @@ def route_intent(message: str, persona: str = "b2c", mode: Optional[str] = None,
         ok = _set_place("origin_current", addr)
         return _as_reply("set_origin_current", "✅ OK, zapamiętałem gdzie jesteś." if ok else "Nie udało się zapisać lokalizacji.")
 
-    # =============================
-    # PLAN DNIA
-    # =============================
-    if low in {"plan dnia", "co dziś", "co dzis", "dzisiaj", "dziś"}:
-        try:
-            from app.b2c.day_plan import build_day_plan
-            today_iso = date.today().isoformat()
-            tasks_today = tasks_mod.list_tasks_for_date(today_iso) or []
-            origin_addr = _get_origin_address()
-            transport_default = _get_place("travel_mode_default") or "samochodem"
-            plan = build_day_plan(tasks_today, today_iso, origin_addr, transport_default, buffer_min=TRAVEL_BUFFER_MIN)
-            return _as_reply("day_plan", plan)
-        except Exception:
-            return _as_reply("day_plan", "Nie mogę teraz wygenerować planu dnia.")
-
 
     # =============================
     # TRAVEL mode + ETA (MVP)
@@ -376,11 +375,8 @@ def route_intent(message: str, persona: str = "b2c", mode: Optional[str] = None,
         return _as_reply("set_travel_mode", f"✅ Ustawiono tryb: {pretty}.")
 
     # Shortcuts without "tryb:"
-    # IMPORTANT: if a travel flow is active, do not swallow the message here.
-    # Let the pending travel handler below compute ETA/leave time.
-    pending_t_guard = tasks_mod.get_pending_travel()
     mode_norm = _normalize_travel_mode(low)
-    if (not pending_t_guard) and mode_norm and low in {"samochod","samochód","samochodem","autobus","komunikacja","komunikacją","rower","rowerem","pieszo"}:
+    if mode_norm and low in {"samochod","samochód","samochodem","autobus","komunikacja","komunikacją","rower","rowerem","pieszo"}:
         _set_place("travel_mode_default", mode_norm)
         pretty = {"samochod":"samochód", "autobus":"autobus", "rower":"rower", "pieszo":"pieszo"}[mode_norm]
         return _as_reply("set_travel_mode", f"✅ Ustawiono tryb: {pretty}.")
@@ -758,6 +754,7 @@ def route_intent(message: str, persona: str = "b2c", mode: Optional[str] = None,
             elif mode_key == ORIGIN_CURRENT:
                 _set_place("origin_mode", ORIGIN_CURRENT)
             else:
+                # Treat as explicit address start
                 _set_place("origin_custom", ans)
                 _set_place("origin_mode", ORIGIN_CUSTOM)
 
@@ -837,19 +834,9 @@ def route_intent(message: str, persona: str = "b2c", mode: Optional[str] = None,
                                 dt = dt.astimezone().replace(tzinfo=None)
                             remind_dt = dt - timedelta(minutes=int(mins) + 10)
                             reminder_at = remind_dt.strftime("%Y-%m-%dT%H:%M")
-                            try:
-                                tasks_mod.update_task(
-                                    pending_task_id,
-                                    eta_min=int(mins),
-                                    leave_at=remind_dt.strftime("%H:%M"),
-                                    reminder_at=reminder_at,
-                                    start_origin=origin,
-                                )
-                            except Exception:
-                                pass
                             tasks_mod.set_pending_reminder(pending_task_id, reminder_at, created_from="add")
                             base = _reply_from_any(out, default="OK")
-                            return _as_reply("set_reminder", f"{base}\n\nStart: **{origin}**. ETA: **{mins} min**. Proponuję wyjść o **{remind_dt.strftime('%H:%M')}**. Ustawić przypomnienie? (tak/nie)")
+                            return _as_reply("set_reminder", f"{base}\n\nETA: **{mins} min**. Proponuję wyjść o **{remind_dt.strftime('%H:%M')}**. Ustawić przypomnienie? (tak/nie)")
     
                 return _as_reply("set_travel_mode", _reply_from_any(out, default="OK"))
     

@@ -13,6 +13,7 @@ TASKS_FILE = DATA_DIR / "tasks.json"
 PENDING_TRAVEL_FILE = DATA_DIR / "pending_travel.json"
 PENDING_CLEAR_FILE = DATA_DIR / "pending_clear.json"
 PENDING_REMINDER_FILE = DATA_DIR / "pending_reminder.json"
+PENDING_CHECKLIST_FILE = DATA_DIR / "pending_checklist.json"
 
 # --- Travel mode parsing ---
 TRAVEL_MODES = {
@@ -33,6 +34,10 @@ TRAVEL_MODES = {
 
 def _ensure_dir(p: Path) -> None:
     p.parent.mkdir(parents=True, exist_ok=True)
+# Public alias (tests & older callers)
+def ensure_dir(p: Path) -> None:
+    _ensure_dir(p)
+
 
 def _load_json(path: Path, default: Any) -> Any:
     if not path.exists():
@@ -59,6 +64,58 @@ def parse_travel_mode(text: str) -> Optional[str]:
         if re.search(rf"\b{re.escape(k)}\b", low):
             return v
     return None
+
+def parse_add_command(text: str) -> Optional[str]:
+    """Parse simple add-task commands.
+
+    Expected forms (case-insensitive):
+      - "dodaj <treść>"
+      - "add <content>"
+      - "task <content>"
+
+    Returns the extracted content or None if the text is not an add command.
+    This function exists primarily as a stable module contract for tests and
+    older Jarvis flows.
+    """
+    if not text:
+        return None
+    t = text.strip()
+    m = re.match(r"^(?:dodaj|add|task)\s+(.+)$", t, flags=re.IGNORECASE)
+    if not m:
+        return None
+    return m.group(1).strip()
+
+
+def _ensure_dirs() -> None:
+    """Ensure required storage directories/files parents exist.
+
+    Tests patch DATA_DIR / TASKS_FILE / PENDING_* paths and then call this
+    helper to make sure the temp directory exists before reading/writing.
+    """
+    global DATA_DIR, TASKS_FILE, PENDING_TRAVEL_FILE, PENDING_CLEAR_FILE, PENDING_REMINDER_FILE, PENDING_CHECKLIST_FILE
+
+    # Normalize to Path where possible (tests may assign Path already)
+    if not isinstance(DATA_DIR, Path):
+        DATA_DIR = Path(str(DATA_DIR))
+
+    # Create base dir
+    DATA_DIR.mkdir(parents=True, exist_ok=True)
+
+    # Ensure parents for any known files (robust to reassignment)
+    for p in [TASKS_FILE, PENDING_TRAVEL_FILE, PENDING_CLEAR_FILE, PENDING_REMINDER_FILE, PENDING_CHECKLIST_FILE]:
+        try:
+            if not isinstance(p, Path):
+                p = Path(str(p))
+            p.parent.mkdir(parents=True, exist_ok=True)
+        except Exception:
+            # If something is unexpectedly not path-like, ignore here; file ops will surface errors.
+            pass
+
+
+# Public alias (some callers may prefer the pluralized name)
+def ensure_dirs() -> None:
+    _ensure_dirs()
+
 
 def _parse_date_time_polish(text: str) -> Tuple[Optional[str], Optional[str], str]:
     """
@@ -141,6 +198,40 @@ def pop_pending_reminder():
         clear_pending_reminder()
     return pending
 
+# --- Pending checklist capture (CLI line-by-line) ---
+def get_pending_checklist() -> Optional[Dict[str, Any]]:
+    """Return pending checklist capture state or None.
+
+    State shape:
+      { "task_id": int|None, "title": str, "items": [str, ...] }
+    """
+    data = _load_json(PENDING_CHECKLIST_FILE, default=None)
+    if not isinstance(data, dict):
+        return None
+    # task_id can be int or None
+    tid = data.get("task_id")
+    if tid is not None and not isinstance(tid, int):
+        return None
+    title = data.get("title")
+    if title is not None and not isinstance(title, str):
+        return None
+    items = data.get("items")
+    if items is not None and not isinstance(items, list):
+        return None
+    return data
+
+
+def set_pending_checklist(state: Optional[Dict[str, Any]]) -> None:
+    """Set or clear pending checklist capture state."""
+    if state is None:
+        if PENDING_CHECKLIST_FILE.exists():
+            try:
+                PENDING_CHECKLIST_FILE.unlink()
+            except Exception:
+                _save_json(PENDING_CHECKLIST_FILE, None)
+        return
+    _save_json(PENDING_CHECKLIST_FILE, state)
+
 def _next_id(tasks: List[Dict[str, Any]]) -> int:
     """Smallest free positive integer id.
 
@@ -215,9 +306,59 @@ def _strip_meta_tokens_from_title(title: str):
         break
     return " ".join(words).strip(), pr, dur
 
+
+
+# --- Stable heuristic: infer location from titles without commas ---
+def _infer_location_from_title(title: str) -> Tuple[str, Optional[str]]:
+    """
+    Best-effort split for inputs like:
+      "dentysta Narbutta 86 Warszawa"
+      "spotkanie ul. Marszałkowska 10 Warszawa"
+      "zrób zakupy w biedronce ul. Narbutta 86 Warszawa"
+
+    Returns (clean_title, location_or_none).
+    """
+    raw = (title or "").strip()
+    if not raw:
+        return raw, None
+
+    tokens = raw.split()
+    if len(tokens) < 3:
+        return raw, None
+
+    digit_idx = None
+    for i, tok in enumerate(tokens):
+        if re.search(r"\d", tok):
+            digit_idx = i
+            break
+
+    if digit_idx is None:
+        return raw, None
+
+    # Usually location starts one token before the house number.
+    start = max(0, digit_idx - 1)
+    street_markers = {"ul", "ul.", "al", "al.", "aleje", "pl", "pl.", "plac", "os", "os.", "osiedle"}
+
+    if start - 1 >= 0 and tokens[start - 1].lower() in street_markers:
+        start -= 1
+
+    if start <= 0:
+        return raw, None
+
+    title_part = " ".join(tokens[:start]).strip(" ,")
+    loc_part = " ".join(tokens[start:]).strip(" ,")
+
+    if not title_part or not loc_part or not re.search(r"\d", loc_part):
+        return raw, None
+
+    return title_part, loc_part
+
 def add_task(raw: str) -> Dict[str, Any]:
     """Adds a task. Accepts optional travel mode anywhere in text."""
     raw = (raw or "").strip()
+    low = raw.lower()
+    if low.startswith("zapamiętaj") or low.startswith("zapamietaj") or low.startswith("pamięć") or low.startswith("pamiec") or low.startswith("co pamiętasz") or low.startswith("co pamietasz") or low.startswith("gdzie mieszkam") or low.startswith("zapomnij"):
+        return {"reply": "To jest komenda pamięci, nie zadanie.", "task": None, "ignored": True}
     travel = parse_travel_mode(raw)
 
     due_date, due_time, rest = _parse_date_time_polish(raw)
@@ -256,6 +397,13 @@ def add_task(raw: str) -> Dict[str, Any]:
                 loc_parts.append(tok)
             if loc_parts:
                 location = ", ".join(loc_parts)
+    else:
+        # Address without comma:
+        # "dentysta Narbutta 86 Warszawa" -> title="dentysta", location="Narbutta 86 Warszawa"
+        # "zrób zakupy w biedronce ul. Narbutta 86 Warszawa" -> title="zrób zakupy w biedronce", location="ul. Narbutta 86 Warszawa"
+        title, inferred_location = _infer_location_from_title(title)
+        if inferred_location:
+            location = inferred_location
 
     if priority is None:
         priority = 2
@@ -291,10 +439,10 @@ def add_task(raw: str) -> Dict[str, Any]:
 
     reply = f"✅ Dodane zadanie #{task_id}: {task['title']}"
     if due_at:
-        reply += f" (na {due_at})"
+        reply += f" (na {due_at.replace('T', ' ')})"
     if travel:
         reply += f" — dojazd: {travel}"
-    return {"reply": reply, "task": task}
+    return {"id": task_id, "reply": reply, "task": task}
 
 
 # --- Sorting utilities (single source of truth) ---
@@ -422,6 +570,15 @@ def clear_pending_travel() -> None:
             PENDING_TRAVEL_FILE.unlink()
         except Exception:
             _save_json(PENDING_TRAVEL_FILE, None)
+
+
+
+def clear_pending_transport() -> None:
+    """Alias for clearing pending travel/transport selection.
+
+    Some flows/tests refer to 'transport' while storage uses pending_travel.
+    """
+    clear_pending_travel()
 
 
 # --- Pending reminder (yes/no) ---
@@ -618,4 +775,3 @@ def set_reminder(task_id: int, reminder_at: str, enabled: bool = True) -> dict:
 
 def set_transport(task_id: int, transport: str) -> dict:
     return set_task_transport(int(task_id), transport)
-

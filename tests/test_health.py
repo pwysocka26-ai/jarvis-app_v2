@@ -1,10 +1,12 @@
 from fastapi.testclient import TestClient
+
 from app.main import app
+from tests._auth import get_health_get_path
 
 client = TestClient(app)
 
 def test_health_v1_includes_ids():
-    r = client.get("/v1/health")
+    r = client.get(get_health_get_path(client))
     assert r.status_code == 200
     data = r.json()
     assert data["ok"] is True

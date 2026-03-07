@@ -1,11 +1,18 @@
 from __future__ import annotations
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, AliasChoices
 from datetime import datetime, date
 from typing import Any, Dict, Optional, List
 
 class ChatRequest(BaseModel):
-    message: str = Field(..., description="Message from user")
+    # Accept both `message` and legacy `text` for backwards compatibility.
+    message: str = Field(
+        ...,
+        description="Message from user",
+        min_length=1,
+        max_length=5000,
+        validation_alias=AliasChoices("message", "text"),
+    )
     mode: Optional[str] = Field(
         default=None,
         description='Session mode: "b2c" (default) or "pro"',

@@ -4,72 +4,77 @@ import os
 import re
 import traceback
 from typing import Any
+from datetime import date as _date, timedelta as _timedelta
 
 from fastapi import APIRouter, Depends, Header, HTTPException
 
-from app.config import settings
 from app.schemas import ChatRequest, ChatResponse
 from app.orchestrator.core import handle_chat
+from app.api.security import verify_token
 
-router = APIRouter(prefix="/v1", tags=["chat"])
+# Backwards-compatible alias (older code/tests may import `_auth` from this module).
+_auth = verify_token
+
+router = APIRouter(tags=["chat"])
 
 # -----------------------------------------------------------------------------
 # Diagnostics toggles (set as environment variables)
 #
 #   JARVIS_DIAG=1        -> prints HIT + OUT summary (safe, recommended)
-#   JARVIS_STACK=1       -> prints Python stack trace on each /v1/chat request
+#   JARVIS_STACK=1       -> prints Python stack trace on each /chat request
 #   JARVIS_TRACE_RAISE=1 -> raises RuntimeError("TRACE ME") after handle_chat
-#
-# Examples (PowerShell):
-#   $env:JARVIS_DIAG="1"
-#   $env:JARVIS_STACK="1"
-#   $env:JARVIS_TRACE_RAISE="1"
 # -----------------------------------------------------------------------------
 DIAG = os.getenv("JARVIS_DIAG", "").strip() == "1"
 STACK = os.getenv("JARVIS_STACK", "").strip() == "1"
 TRACE_RAISE = os.getenv("JARVIS_TRACE_RAISE", "").strip() == "1"
 
-print("### LOADED app/api/chat.py ###", __file__, "| DIAG=", DIAG, "| STACK=", STACK, "| RAISE=", TRACE_RAISE)
+
+def _parse_list_date_arg(message: str) -> str:
+    """Parse date argument from commands like: 'lista', 'lista jutro', 'lista 2026-03-01'."""
+    msg = (message or "").strip().lower()
+    parts = msg.split()
+    if len(parts) < 2:
+        return _date.today().isoformat()
+    arg = parts[1].strip()
+    if arg in {"jutro", "tomorrow"}:
+        return (_date.today() + _timedelta(days=1)).isoformat()
+    if arg in {"dzis", "dziś", "today"}:
+        return _date.today().isoformat()
+    if re.fullmatch(r"\d{4}-\d{2}-\d{2}", arg):
+        return arg
+    return _date.today().isoformat()
 
 
-def _clean_token(token: str | None) -> str:
-    if not token:
-        return ""
-    t = token.strip()
-    # handle accidental quotes pasted from PowerShell/docs
-    if (t.startswith('"') and t.endswith('"')) or (t.startswith("'") and t.endswith("'")):
-        t = t[1:-1].strip()
-    return t
-
-
-def _auth(
-    x_api_token: str | None = Header(default=None, alias="X-API-Token"),
-    authorization: str | None = Header(default=None, alias="Authorization"),
-) -> None:
-    """Simple shared-secret auth for local dev.
-
-    Accepts either:
-    - X-API-Token: <token>
-    - Authorization: Bearer <token>
-
-    If settings.api_token is empty, auth is disabled.
-    """
-    expected = _clean_token(settings.api_token)
-    if not expected:
-        return
-
-    got = _clean_token(x_api_token)
-    if not got and authorization:
-        m = re.match(r"^Bearer\s+(.+)$", authorization.strip(), flags=re.IGNORECASE)
-        if m:
-            got = _clean_token(m.group(1))
-
-    if got != expected:
-        raise HTTPException(status_code=401, detail="Unauthorized")
+def _build_structured_payload(intent: str | None, message: str | None) -> dict:
+    """Build optional structured payload without touching business logic."""
+    intent = (intent or "").strip()
+    if intent == "list_tasks":
+        d = _parse_list_date_arg(message or "")
+        try:
+            from app.b2c import tasks as tasks_mod
+            tasks = tasks_mod.sort_for_list(tasks_mod.list_tasks_for_date(d), mode=tasks_mod.get_sort_mode())
+            safe = []
+            for t in tasks:
+                if not isinstance(t, dict):
+                    continue
+                safe.append({
+                    "id": t.get("id"),
+                    "title": t.get("title"),
+                    "due_at": t.get("due_at"),
+                    "due_date": t.get("due_date"),
+                    "time": t.get("time"),
+                    "location": t.get("location") or t.get("place"),
+                    "priority": t.get("priority"),
+                    "priority_explicit": bool(t.get("priority_explicit")),
+                    "travel_mode": t.get("travel_mode") or t.get("mode"),
+                })
+            return {"date": d, "tasks": safe}
+        except Exception:
+            return {"date": d, "tasks": []}
+    return {}
 
 
 def _head(s: Any, n: int = 160) -> str:
-    """Safe preview helper for debug printing."""
     if s is None:
         return ""
     try:
@@ -81,9 +86,10 @@ def _head(s: Any, n: int = 160) -> str:
 
 
 @router.post("/chat", response_model=ChatResponse)
-def chat(req: ChatRequest, _: None = Depends(_auth)) -> ChatResponse:
+@router.post("/v1/chat", response_model=ChatResponse)
+def chat(req: ChatRequest, _: None = Depends(verify_token)) -> ChatResponse:
     if DIAG:
-        print("\n### HIT /v1/chat ###", __file__)
+        print("\n### HIT /chat ###")
         print("### REQ ### message_head=", _head(req.message, 120), "| mode=", req.mode)
 
     out = handle_chat(req.message, mode=req.mode)
@@ -98,20 +104,22 @@ def chat(req: ChatRequest, _: None = Depends(_auth)) -> ChatResponse:
         if isinstance(out, dict):
             print("### OUT INTENT ###", out.get("intent"))
             print("### OUT REPLY HEAD ###", _head(out.get("reply"), 200))
-            print("### OUT RESPONSE HEAD ###", _head(out.get("response"), 200))
 
     if STACK:
-        print("\n### STACK TRACE (/v1/chat) ###")
+        print("\n### STACK TRACE (/chat) ###")
         traceback.print_stack()
 
     if TRACE_RAISE:
-        # Use only temporarily to force a visible error + traceback in server console.
         raise RuntimeError("TRACE ME")
 
-    # NOTE: CLI typically uses `reply`, but we keep `meta` with everything else
-    # so you can inspect `response` etc.
     reply = out.get("reply", "") if isinstance(out, dict) else ""
     intent = out.get("intent") if isinstance(out, dict) else None
     meta = {k: v for k, v in out.items() if k not in ("reply", "intent")} if isinstance(out, dict) else {}
+
+    # Add optional structured fields for stable tests/clients
+    structured = _build_structured_payload(intent, req.message)
+    if structured:
+        meta = dict(meta)
+        meta.setdefault("structured", structured)
 
     return ChatResponse(reply=reply, intent=intent, meta=meta)

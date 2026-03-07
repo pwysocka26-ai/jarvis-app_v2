@@ -23,7 +23,9 @@ def upgrade() -> None:
         sa.Column("day", sa.Date(), nullable=False),
         sa.Column("mode", sa.String(length=20), nullable=False, server_default="b2c"),
         sa.Column("summary", sa.Text(), nullable=True),
-        sa.Column("created_at", sa.DateTime(), nullable=False, server_default=sa.text("now()")),
+        # NOTE: use a DB-agnostic timestamp default. SQLite does not support `now()`.
+        # `CURRENT_TIMESTAMP` works in SQLite and Postgres.
+        sa.Column("created_at", sa.DateTime(), nullable=False, server_default=sa.text("CURRENT_TIMESTAMP")),
     )
     op.create_index("ix_day_plans_user_id", "day_plans", ["user_id"])
     op.create_index("ix_day_plans_day", "day_plans", ["day"])

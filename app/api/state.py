@@ -6,7 +6,14 @@ from typing import Literal
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel, Field
 
-from app.api.chat import _auth
+"""State/health API.
+
+NOTE: Auth dependency lives in `app.api.security` (single source of truth).
+Historically some modules imported a private `_auth` from `app.api.chat`.
+That made tests/production brittle when the chat module was refactored.
+"""
+
+from app.api.security import auth_dependency as _auth
 from app.daily_state.service import get_day_state, set_day_state
 
 router = APIRouter(prefix="/v1", tags=["state"])

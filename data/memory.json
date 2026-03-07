@@ -123,5 +123,11 @@
       "Zbudować Jarvisa B2C (asystent w chmurze)"
     ],
     "notes": []
+  },
+  "items": [
+    "mieszkam przy Narbutta 86 Warszawa"
+  ],
+  "kv": {
+    "default_transport": "samochod"
   }
 }

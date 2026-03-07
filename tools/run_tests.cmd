@@ -1,60 +1,19 @@
 @echo off
-setlocal enabledelayedexpansion
+setlocal EnableExtensions
 
-REM Run tests in a stable way and keep the window open.
-set "ROOT=%~dp0.."
-pushd "%ROOT%" >nul
+REM Always run from project root to avoid pytest collecting outside the repo.
+cd /d "%~dp0\.."
 
-echo [INFO] Project root: %CD%
+REM Make test runs deterministic and production-safe.
+set JARVIS_ENV=test
+set JARVIS_DISABLE_SCHEDULER=1
+if "%API_TOKEN%"=="" set API_TOKEN=dev-token
 
-REM Prefer venv python if exists
-set "PY=%CD%\.venv\Scripts\python.exe"
-if exist "%PY%" (
-  echo [INFO] Python cmd: %PY%
+REM Default: run the safety test suite only. Pass "full" to run everything.
+if /I "%1"=="full" (
+  python -m pytest -q --disable-warnings --maxfail=1 --cov=app --cov-report=term-missing --cov-report=html
 ) else (
-  echo [WARN] No .venv python, trying py -3 / python...
-  set "PY=py -3"
-  %PY% --version >nul 2>nul
-  if errorlevel 1 (
-    set "PY=python"
-    %PY% --version >nul 2>nul
-  )
-  if errorlevel 1 (
-    echo [ERROR] Could not find Python. Activate venv or install Python.
-    goto :end
-  )
+  python -m pytest -q tests_sanity --disable-warnings --maxfail=1
 )
 
-echo [INFO] Checking pip...
-%PY% -m pip --version >nul 2>nul
-if errorlevel 1 (
-  echo [WARN] pip missing, trying ensurepip...
-  %PY% -m ensurepip --upgrade
-  if errorlevel 1 (
-    echo [ERROR] ensurepip failed.
-    goto :end
-  )
-)
-
-echo [INFO] Installing pytest...
-%PY% -m pip install -q --disable-pip-version-check pytest
-if errorlevel 1 (
-  echo [ERROR] Failed to install pytest.
-  goto :end
-)
-
-echo [INFO] Running tests (tests_sanity)...
-%PY% -m pytest -q tests_sanity
-set "EC=%ERRORLEVEL%"
-
-if "%EC%"=="0" (
-  echo [INFO] OK. Tests passed.
-) else (
-  echo [ERROR] Tests failed. ExitCode=%EC%
-)
-
-:end
-popd >nul
-echo.
-pause
-exit /b %EC%
+endlocal
