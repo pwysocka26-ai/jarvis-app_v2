@@ -172,6 +172,19 @@ def _get_origin_address() -> Optional[str]:
     return _get_place("origin_work")
 
 
+
+
+def _resolve_origin_from_answer(ans: str) -> Tuple[str, Optional[str]]:
+    raw = (ans or "").strip()
+    low = raw.lower()
+    if low in {"dom", "home"}:
+        return ORIGIN_HOME, _get_place("origin_home")
+    if low in {"praca", "work"}:
+        return ORIGIN_WORK, _get_place("origin_work")
+    if low in {"tu", "tutaj", "obecna", "obecna lokalizacja"}:
+        return ORIGIN_CURRENT, _get_place("origin_current") or _get_place("origin_home") or _get_place("origin_work")
+    return ORIGIN_CUSTOM, raw
+
 # -----------------------------
 # Sorting & display helpers
 # -----------------------------
@@ -299,209 +312,22 @@ def route_intent(message: str, persona: str = "b2c", mode: Optional[str] = None,
             or t.startswith("rano")
             or t.startswith("diag")
             or t.startswith("help")
+            or t.startswith("pamięć")
+            or t.startswith("pamiec")
+            or t.startswith("pokaż pamięć")
+            or t.startswith("pokaz pamiec")
+            or t.startswith("co pamiętasz")
+            or t.startswith("co pamietasz")
+            or t.startswith("zapamiętaj")
+            or t.startswith("zapamietaj")
+            or t.startswith("zapomnij")
+            or t.startswith("gdzie ")
+            or t.startswith("plan dnia")
+            or t.startswith("co dziś")
+            or t.startswith("co dzis")
+            or t.startswith("dzisiaj")
+            or t.startswith("dziś")
         )
-
-
-    # =============================
-    # CHECKLIST attached to task
-    # =============================
-    def _resolve_task_for_live_number(num: int, d: date | None = None) -> Optional[Dict[str, Any]]:
-        d = d or date.today()
-        tasks_for_day = _sort_for_list(tasks_mod.list_tasks_for_date(d) or [])
-        if 1 <= num <= len(tasks_for_day):
-            return tasks_for_day[num - 1]
-        return None
-
-    # active checklist capture (line-by-line)
-    pending_c = tasks_mod.get_pending_checklist() if hasattr(tasks_mod, "get_pending_checklist") else None
-    if pending_c:
-        task_id = int(pending_c.get("task_id"))
-        if low in {"koniec", "zapisz", "done", "stop"}:
-            title = str((pending_c.get("title") or "Lista")).rstrip(":")
-            if hasattr(tasks_mod, "clear_pending_checklist"):
-                tasks_mod.clear_pending_checklist()
-            return _as_reply("checklist_done", f"✅ Zapisano listę „{title}”.")
-        if (message or "").strip().startswith("-"):
-            txt = (message or "").strip().lstrip("-").strip()
-            if hasattr(tasks_mod, "add_checklist_item_to_task"):
-                t = tasks_mod.add_checklist_item_to_task(task_id, txt)
-                cl = (t or {}).get("checklist") if isinstance(t, dict) else {}
-                items = (cl or {}).get("items") if isinstance(cl, dict) else []
-                idx_item = len(items) if isinstance(items, list) else "?"
-                return _as_reply("checklist_item", f"✅ Dodano: {txt} (#{idx_item}). Wpisz kolejne albo `koniec`.")
-        if (message or "").strip().endswith(":"):
-            title = (message or "").strip().rstrip(":")
-            if hasattr(tasks_mod, "set_checklist_title"):
-                tasks_mod.set_checklist_title(task_id, title)
-            if hasattr(tasks_mod, "set_pending_checklist"):
-                tasks_mod.set_pending_checklist(task_id, title=title)
-            return _as_reply("checklist", "OK — podawaj pozycje listy linia po linii. Na końcu wpisz `koniec`.")
-        # while active, keep guidance instead of falling into other flows
-        return _as_reply("checklist", "Podaj pozycję listy jako `- coś` albo wpisz `koniec`.")
-
-    # start checklist capture for the last task
-    if (message or "").strip().endswith(":") and low not in {"start:", "tryb:"}:
-        last_task = tasks_mod.get_last_task() if hasattr(tasks_mod, "get_last_task") else None
-        if last_task and isinstance(last_task, dict) and last_task.get("id") is not None:
-            title = (message or "").strip().rstrip(":")
-            if hasattr(tasks_mod, "set_checklist_title"):
-                tasks_mod.set_checklist_title(int(last_task["id"]), title)
-            if hasattr(tasks_mod, "set_pending_checklist"):
-                tasks_mod.set_pending_checklist(int(last_task["id"]), title=title)
-            return _as_reply("checklist", "OK — podawaj pozycje listy linia po linii. Na końcu wpisz `koniec`.")
-
-    # pokaż 1
-    m_show = re.search(r"^poka[żz]\s+(\d+)\s*$", low)
-    if m_show:
-        num = int(m_show.group(1))
-        t = _resolve_task_for_live_number(num)
-        if not t:
-            return _as_reply("show_task", f"Nie ma zadania #{num} na dziś.")
-        lines = [f"#{num} {_clean_title_for_display(str(t.get('title') or '(bez tytułu)'))}"]
-        if t.get("location"):
-            lines.append(f"Miejsce: {t.get('location')}")
-        due = str(t.get("due_at") or "")
-        if due:
-            lines.append(f"Kiedy: {due.replace('T',' ')}")
-        cl = t.get("checklist")
-        if isinstance(cl, dict):
-            lines.append(f"{cl.get('title') or 'Lista'}:")
-            items = cl.get("items") or []
-            for idx_i, it in enumerate(items, start=1):
-                txt = it.get("text") if isinstance(it, dict) else str(it)
-                done = bool(it.get("done")) if isinstance(it, dict) else False
-                mark = "☑" if done else "☐"
-                lines.append(f"{num}.{idx_i} {mark} {txt}")
-        return _as_reply("show_task", "\n".join(lines))
-
-    # zrobione 1.2 / odznacz 1.2
-    m_done = re.search(r"^zrobione\s+(\d+)\.(\d+)\s*$", low)
-    if m_done:
-        task_no = int(m_done.group(1)); item_no = int(m_done.group(2))
-        t = _resolve_task_for_live_number(task_no)
-        if not t:
-            return _as_reply("checklist", f"Nie ma zadania #{task_no} na dziś.")
-        ok = tasks_mod.toggle_checklist_item(int(t["id"]), item_no, True) if hasattr(tasks_mod, "toggle_checklist_item") else None
-        return _as_reply("checklist", "✅ Odhaczone." if ok else "Nie udało się odhaczyć pozycji.")
-
-    m_undo = re.search(r"^odznacz\s+(\d+)\.(\d+)\s*$", low)
-    if m_undo:
-        task_no = int(m_undo.group(1)); item_no = int(m_undo.group(2))
-        t = _resolve_task_for_live_number(task_no)
-        if not t:
-            return _as_reply("checklist", f"Nie ma zadania #{task_no} na dziś.")
-        ok = tasks_mod.toggle_checklist_item(int(t["id"]), item_no, False) if hasattr(tasks_mod, "toggle_checklist_item") else None
-        return _as_reply("checklist", "✅ Odznaczone." if ok else "Nie udało się odznaczyć pozycji.")
-
-    m_add_item = re.search(r"^dodaj do\s+(\d+)\s*:\s*(.+)$", low)
-    if m_add_item:
-        task_no = int(m_add_item.group(1)); txt = message.split(":",1)[1].strip()
-        t = _resolve_task_for_live_number(task_no)
-        if not t:
-            return _as_reply("checklist", f"Nie ma zadania #{task_no} na dziś.")
-        ok = tasks_mod.add_checklist_item_manual(int(t["id"]), txt) if hasattr(tasks_mod, "add_checklist_item_manual") else None
-        return _as_reply("checklist", f"✅ Dodano: {txt}" if ok else "Nie udało się dodać pozycji.")
-
-    m_del_item = re.search(r"^(?:usu[ńn]\s+z)\s+(\d+)\s*:\s*(.+)$", low)
-    if m_del_item:
-        task_no = int(m_del_item.group(1)); txt = message.split(":",1)[1].strip()
-        t = _resolve_task_for_live_number(task_no)
-        if not t:
-            return _as_reply("checklist", f"Nie ma zadania #{task_no} na dziś.")
-        ok = tasks_mod.remove_checklist_item_manual(int(t["id"]), txt) if hasattr(tasks_mod, "remove_checklist_item_manual") else None
-        return _as_reply("checklist", f"✅ Usunięto: {txt}" if ok else "Nie udało się usunąć pozycji.")
-
-
-
-    # =============================
-    # CHECKLIST commands (stable, no pending state)
-    # =============================
-    def _resolve_task_for_live_number(num: int, d: date | None = None) -> Optional[Dict[str, Any]]:
-        d = d or date.today()
-        tasks_for_day = _sort_for_list(tasks_mod.list_tasks_for_date(d) or [])
-        if 1 <= num <= len(tasks_for_day):
-            return tasks_for_day[num - 1]
-        return None
-
-    m_add_full = re.search(r"^dodaj do zadania\s+(\d+)\s+([^:]+):\s*(.+)$", low)
-    if m_add_full:
-        task_no = int(m_add_full.group(1))
-        title = message.split(":", 1)[0].split(None, 4)[4].strip()  # preserves original case after task number
-        items_part = message.split(":", 1)[1].strip()
-        t = _resolve_task_for_live_number(task_no)
-        if not t:
-            return _as_reply("checklist", f"Nie ma zadania #{task_no} na dziś.")
-        items = [x.strip() for x in items_part.split(",") if x.strip()]
-        saved = tasks_mod.replace_task_checklist(int(t["id"]), title, items) if hasattr(tasks_mod, "replace_task_checklist") else None
-        if not saved:
-            return _as_reply("checklist", "Nie udało się dodać checklisty.")
-        cl = saved.get("checklist") or {}
-        lines = [f"✅ Dodano checklistę do zadania #{task_no}", "", f"{cl.get('title') or 'Lista'}:"]
-        for idx_i, it in enumerate(cl.get("items") or [], start=1):
-            txt = it.get("text") if isinstance(it, dict) else str(it)
-            lines.append(f"{task_no}.{idx_i} ☐ {txt}")
-        return _as_reply("checklist", "\n".join(lines))
-
-    m_add_short = re.search(r"^dodaj do\s+(\d+)\s*:\s*(.+)$", low)
-    if m_add_short:
-        task_no = int(m_add_short.group(1))
-        txt = message.split(":", 1)[1].strip()
-        t = _resolve_task_for_live_number(task_no)
-        if not t:
-            return _as_reply("checklist", f"Nie ma zadania #{task_no} na dziś.")
-        ok = tasks_mod.add_checklist_item_manual(int(t["id"]), txt) if hasattr(tasks_mod, "add_checklist_item_manual") else None
-        return _as_reply("checklist", f"✅ Dodano: {txt}" if ok else "Nie udało się dodać pozycji.")
-
-    m_show = re.search(r"^poka[żz]\s+(\d+)\s*$", low)
-    if m_show:
-        num = int(m_show.group(1))
-        t = _resolve_task_for_live_number(num)
-        if not t:
-            return _as_reply("show_task", f"Nie ma zadania #{num} na dziś.")
-        lines = [f"#{num} {_clean_title_for_display(str(t.get('title') or '(bez tytułu)'))}"]
-        if t.get("location"):
-            lines.append(f"Miejsce: {t.get('location')}")
-        due = str(t.get("due_at") or "")
-        if due:
-            lines.append(f"Kiedy: {due.replace('T',' ')}")
-        cl = t.get("checklist")
-        if isinstance(cl, dict):
-            lines.append("")
-            lines.append(f"{cl.get('title') or 'Lista'}:")
-            for idx_i, it in enumerate(cl.get("items") or [], start=1):
-                txt = it.get("text") if isinstance(it, dict) else str(it)
-                done = bool(it.get("done")) if isinstance(it, dict) else False
-                mark = "☑" if done else "☐"
-                lines.append(f"{num}.{idx_i} {mark} {txt}")
-        return _as_reply("show_task", "\n".join(lines))
-
-    m_done = re.search(r"^zrobione\s+(\d+)\.(\d+)\s*$", low)
-    if m_done:
-        task_no = int(m_done.group(1)); item_no = int(m_done.group(2))
-        t = _resolve_task_for_live_number(task_no)
-        if not t:
-            return _as_reply("checklist", f"Nie ma zadania #{task_no} na dziś.")
-        ok = tasks_mod.toggle_checklist_item(int(t["id"]), item_no, True) if hasattr(tasks_mod, "toggle_checklist_item") else None
-        return _as_reply("checklist", "✅ Odhaczone." if ok else "Nie udało się odhaczyć pozycji.")
-
-    m_undo = re.search(r"^odznacz\s+(\d+)\.(\d+)\s*$", low)
-    if m_undo:
-        task_no = int(m_undo.group(1)); item_no = int(m_undo.group(2))
-        t = _resolve_task_for_live_number(task_no)
-        if not t:
-            return _as_reply("checklist", f"Nie ma zadania #{task_no} na dziś.")
-        ok = tasks_mod.toggle_checklist_item(int(t["id"]), item_no, False) if hasattr(tasks_mod, "toggle_checklist_item") else None
-        return _as_reply("checklist", "✅ Odznaczone." if ok else "Nie udało się odznaczyć pozycji.")
-
-    m_del_item = re.search(r"^(?:usu[ńn]\s+z)\s+(\d+)\s*:\s*(.+)$", low)
-    if m_del_item:
-        task_no = int(m_del_item.group(1)); txt = message.split(":", 1)[1].strip()
-        t = _resolve_task_for_live_number(task_no)
-        if not t:
-            return _as_reply("checklist", f"Nie ma zadania #{task_no} na dziś.")
-        ok = tasks_mod.remove_checklist_item_manual(int(t["id"]), txt) if hasattr(tasks_mod, "remove_checklist_item_manual") else None
-        return _as_reply("checklist", f"✅ Usunięto: {txt}" if ok else "Nie udało się usunąć pozycji.")
-
 
     # =============================
     # ORIGIN settings
@@ -521,6 +347,21 @@ def route_intent(message: str, persona: str = "b2c", mode: Optional[str] = None,
         ok = _set_place("origin_current", addr)
         return _as_reply("set_origin_current", "✅ OK, zapamiętałem gdzie jesteś." if ok else "Nie udało się zapisać lokalizacji.")
 
+    # =============================
+    # PLAN DNIA
+    # =============================
+    if low in {"plan dnia", "co dziś", "co dzis", "dzisiaj", "dziś"}:
+        try:
+            from app.b2c.day_plan import build_day_plan
+            today_iso = date.today().isoformat()
+            tasks_today = tasks_mod.list_tasks_for_date(today_iso) or []
+            origin_addr = _get_origin_address()
+            transport_default = _get_place("travel_mode_default") or "samochodem"
+            plan = build_day_plan(tasks_today, today_iso, origin_addr, transport_default, buffer_min=TRAVEL_BUFFER_MIN)
+            return _as_reply("day_plan", plan)
+        except Exception:
+            return _as_reply("day_plan", "Nie mogę teraz wygenerować planu dnia.")
+
 
     # =============================
     # TRAVEL mode + ETA (MVP)
@@ -535,6 +376,8 @@ def route_intent(message: str, persona: str = "b2c", mode: Optional[str] = None,
         return _as_reply("set_travel_mode", f"✅ Ustawiono tryb: {pretty}.")
 
     # Shortcuts without "tryb:"
+    # If travel flow is active, do not swallow transport here.
+    # Let the pending travel handler below calculate ETA / leave time.
     pending_t_guard = tasks_mod.get_pending_travel()
     mode_norm = _normalize_travel_mode(low)
     if (not pending_t_guard) and mode_norm and low in {"samochod","samochód","samochodem","autobus","komunikacja","komunikacją","rower","rowerem","pieszo"}:
@@ -729,6 +572,25 @@ def route_intent(message: str, persona: str = "b2c", mode: Optional[str] = None,
         emoji = PRIORITY_EMOJI.get(pr, f"p{pr}")
         return _as_reply("set_priority", f"✅ Ustawiono priorytet {emoji} dla zadania #{n} na {_label_for_date(target_date)}.")
 
+
+    # =============================
+    # DEV / RESET DZIŚ
+    # =============================
+    if low in {"/reset_dzis", "/reset dzis", "/reset dziś", "reset dzis", "reset dziś"}:
+        removed = 0
+        try:
+            removed = int(tasks_mod.clear_tasks_for_date(date.today().isoformat()))
+        except Exception:
+            removed = 0
+        for fn_name in ("clear_pending_travel", "clear_pending_reminder", "clear_pending_checklist", "clear_pending_clear"):
+            try:
+                fn = getattr(tasks_mod, fn_name, None)
+                if fn:
+                    fn()
+            except Exception:
+                pass
+        return _as_reply("reset_today", f"🧹 Usunięto {removed} zadań na dziś.")
+
     # =============================
     # DELETE (LIVE numeracja) + data
     # usuń 2
@@ -907,17 +769,25 @@ def route_intent(message: str, persona: str = "b2c", mode: Optional[str] = None,
                 return _as_reply("set_origin_mode", "Skąd ruszasz? Napisz: `dom` / `praca` / `tu` albo podaj adres startu.")
     
             ans = (message or "").strip()
-            ans_low = ans.lower()
-            if ans_low in {"dom", "home"}:
+            mode_key, origin_addr = _resolve_origin_from_answer(ans)
+            if mode_key == ORIGIN_HOME:
                 _set_place("origin_mode", ORIGIN_HOME)
-            elif ans_low in {"praca", "work"}:
+            elif mode_key == ORIGIN_WORK:
                 _set_place("origin_mode", ORIGIN_WORK)
-            elif ans_low in {"tu", "tutaj", "obecna", "obecna lokalizacja"}:
-                _set_place("origin_mode", ORIGIN_HERE)
+            elif mode_key == ORIGIN_CURRENT:
+                _set_place("origin_mode", ORIGIN_CURRENT)
             else:
-                # Treat as explicit address start
                 _set_place("origin_custom", ans)
                 _set_place("origin_mode", ORIGIN_CUSTOM)
+
+            try:
+                tasks_mod.update_task(
+                    pending_task_id,
+                    start_origin_mode=mode_key,
+                    start_origin=origin_addr or ans,
+                )
+            except Exception:
+                pass
     
             # If task already has travel mode, skip asking and go straight to reminder proposal
             t = tasks_mod.get_task(pending_task_id)
@@ -941,8 +811,18 @@ def route_intent(message: str, persona: str = "b2c", mode: Optional[str] = None,
                                 dt = dt.astimezone().replace(tzinfo=None)
                             remind_dt = dt - timedelta(minutes=int(mins) + 10)
                             reminder_at = remind_dt.strftime("%Y-%m-%dT%H:%M")
+                            try:
+                                tasks_mod.update_task(
+                                    pending_task_id,
+                                    eta_min=int(mins),
+                                    leave_at=remind_dt.strftime("%H:%M"),
+                                    reminder_at=reminder_at,
+                                    start_origin=origin,
+                                )
+                            except Exception:
+                                pass
                             tasks_mod.set_pending_reminder(pending_task_id, reminder_at, created_from="add")
-                            return _as_reply("set_reminder", f"✅ OK. ETA: **{mins} min**. Proponuję wyjść o **{remind_dt.strftime('%H:%M')}**. Ustawić przypomnienie? (tak/nie)")
+                            return _as_reply("set_reminder", f"✅ OK. Start: **{origin}**. ETA: **{mins} min**. Proponuję wyjść o **{remind_dt.strftime('%H:%M')}**. Ustawić przypomnienie? (tak/nie)")
     
                 return _as_reply("set_origin_mode", "✅ OK.")
     
@@ -976,9 +856,19 @@ def route_intent(message: str, persona: str = "b2c", mode: Optional[str] = None,
                                 dt = dt.astimezone().replace(tzinfo=None)
                             remind_dt = dt - timedelta(minutes=int(mins) + 10)
                             reminder_at = remind_dt.strftime("%Y-%m-%dT%H:%M")
+                            try:
+                                tasks_mod.update_task(
+                                    pending_task_id,
+                                    eta_min=int(mins),
+                                    leave_at=remind_dt.strftime("%H:%M"),
+                                    reminder_at=reminder_at,
+                                    start_origin=origin,
+                                )
+                            except Exception:
+                                pass
                             tasks_mod.set_pending_reminder(pending_task_id, reminder_at, created_from="add")
                             base = _reply_from_any(out, default="OK")
-                            return _as_reply("set_reminder", f"{base}\n\nETA: **{mins} min**. Proponuję wyjść o **{remind_dt.strftime('%H:%M')}**. Ustawić przypomnienie? (tak/nie)")
+                            return _as_reply("set_reminder", f"{base}\n\nStart: **{origin}**. ETA: **{mins} min**. Proponuję wyjść o **{remind_dt.strftime('%H:%M')}**. Ustawić przypomnienie? (tak/nie)")
     
                 return _as_reply("set_travel_mode", _reply_from_any(out, default="OK"))
     
@@ -991,6 +881,51 @@ def route_intent(message: str, persona: str = "b2c", mode: Optional[str] = None,
             return _as_reply("set_travel_mode", _reply_from_any(out, default="OK"))
         if not _is_command_like(message):
             return _as_reply("set_travel_mode", "Jak jedziesz? Napisz: `samochodem` / `komunikacją` / `rowerem` / `pieszo`.")
+    # CHECKLISTA przypięta do zadania
+    # =============================
+    def _resolve_task_for_live_number(num: int, d: date | None = None) -> Optional[Dict[str, Any]]:
+        d = d or date.today()
+        tasks_for_day = _sort_for_list(tasks_mod.list_tasks_for_date(d) or [])
+        if 1 <= num <= len(tasks_for_day):
+            return tasks_for_day[num - 1]
+        return None
+
+    m_add_checklist = re.match(r"^dodaj do zadania\s+(\d+)\s+([^:]+):\s*(.+)$", message, flags=re.I)
+    if m_add_checklist:
+        live_no = int(m_add_checklist.group(1))
+        list_title = m_add_checklist.group(2).strip().rstrip(":")
+        items_raw = m_add_checklist.group(3).strip()
+        task_live = _resolve_task_for_live_number(live_no)
+        if not task_live:
+            return _as_reply("checklist", f"Nie ma zadania #{live_no} na dziś.")
+
+        items = [x.strip().lstrip("-").strip() for x in items_raw.split(",") if x.strip().lstrip("-").strip()]
+        if not items:
+            return _as_reply("checklist", "Podaj pozycje listy po dwukropku, np. `dodaj do zadania 1 kup: mleko, chleb`.")
+
+        checklist = {
+            "title": list_title or "Lista",
+            "items": [{"text": item, "done": False} for item in items],
+        }
+        saved = tasks_mod.update_task(int(task_live.get("id")), checklist=checklist) if hasattr(tasks_mod, "update_task") else None
+        if not saved:
+            return _as_reply("checklist", "Nie udało się dodać checklisty.")
+
+        lines = [f"✅ Dodano checklistę do zadania #{live_no}", "", f"{checklist['title']}:"]
+        for idx_i, item in enumerate(checklist["items"], start=1):
+            lines.append(f"{live_no}.{idx_i} ☐ {item['text']}")
+        return _as_reply("checklist", "\n".join(lines))
+
+    m_add_to = re.match(r"^dodaj do\s+(\d+)\s*:\s*(.+)$", message, flags=re.I)
+    if m_add_to:
+        live_no = int(m_add_to.group(1))
+        item_text = m_add_to.group(2).strip()
+        task_live = _resolve_task_for_live_number(live_no)
+        if not task_live:
+            return _as_reply("checklist", f"Nie ma zadania #{live_no} na dziś.")
+        ok = tasks_mod.add_checklist_item_manual(int(task_live.get("id")), item_text) if hasattr(tasks_mod, "add_checklist_item_manual") else None
+        return _as_reply("checklist", f"✅ Dodano: {item_text}" if ok else "Nie udało się dodać pozycji.")
+
     # DODAJ (spójny numer LIVE z listą)
     # =============================
     if low.startswith("dodaj:") or low.startswith("dodaj "):
