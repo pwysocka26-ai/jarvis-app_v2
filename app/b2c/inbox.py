@@ -44,6 +44,41 @@ def _append_record(path: Path, record: Dict[str, Any]) -> None:
     _write_json(path, data)
 
 
+def _has_schedule(text: str) -> bool:
+    low = (text or "").strip().lower()
+    schedule_patterns = [
+        r"\bdziś\b", r"\bdzis\b", r"\bjutro\b", r"\bpojutrze\b",
+        r"\bza tydzie[nń]\b",
+        r"\bponiedzia[łl]ek\b", r"\bwtorek\b", r"\bśroda\b", r"\bsroda\b",
+        r"\bczwartek\b", r"\bpi[aą]tek\b", r"\bsobota\b", r"\bniedziela\b",
+        r"\b\d{1,2}[:.]\d{2}\b",
+        r"\b\d{1,2}[./-]\d{1,2}(?:[./-]\d{2,4})?\b",
+        r"\b\d{1,2}\s+(stycznia|lutego|marca|kwietnia|maja|czerwca|lipca|sierpnia|wrze[sś]nia|pa[zź]dziernika|listopada|grudnia)\b",
+    ]
+    return any(re.search(p, low) for p in schedule_patterns)
+
+
+def _looks_like_task(text: str) -> bool:
+    low = (text or "").strip().lower()
+    task_patterns = [
+        r"^kup\b",
+        r"^zrobi[ćc]\b",
+        r"^sprawdzi[ćc]\b",
+        r"^zadzwoni[ćc]\b",
+        r"^napisa[ćc]\b",
+        r"^wys[łl]a[ćc]\b",
+        r"^odebra[ćc]\b",
+        r"^um[oó]wi[ćc]\b",
+        r"^zam[oó]wi[ćc]\b",
+        r"^ogarn[aą][ćc]\b",
+        r"^przygotowa[ćc]\b",
+        r"^doda[ćc]\b",
+        r"^musz[eę]\b",
+        r"^trzeba\b",
+    ]
+    return any(re.search(p, low) for p in task_patterns)
+
+
 def _classify_inbox_text(text: str) -> str:
     low = (text or "").strip().lower()
 
@@ -59,6 +94,24 @@ def _classify_inbox_text(text: str) -> str:
     ]
     if any(re.search(p, low) for p in note_patterns):
         return "note"
+
+    idea_patterns = [
+        r"^pomys[łl]\b",
+        r"^idea\b",
+        r"^brainstorm\b",
+        r"^koncepcja\b",
+        r"^wizja\b",
+        r"^inspiracja\b",
+        r"^mo[żz]na by\b",
+        r"^fajnie by by[łl]o\b",
+    ]
+    if any(re.search(p, low) for p in idea_patterns):
+        return "idea"
+
+    # v5.1 fix:
+    # if it's action-oriented and has time/date, treat it as a task FIRST
+    if _looks_like_task(low) and _has_schedule(low):
+        return "task"
 
     reminder_patterns = [
         r"\burodzin",
@@ -88,37 +141,7 @@ def _classify_inbox_text(text: str) -> str:
     if any(re.search(p, low) for p in reminder_patterns):
         return "reminder"
 
-    idea_patterns = [
-        r"^pomys[łl]\b",
-        r"^idea\b",
-        r"^brainstorm\b",
-        r"^koncepcja\b",
-        r"^wizja\b",
-        r"^inspiracja\b",
-        r"^mo[żz]na by\b",
-        r"^fajnie by by[łl]o\b",
-    ]
-    if any(re.search(p, low) for p in idea_patterns):
-        return "idea"
-
-    task_patterns = [
-        r"^kup\b",
-        r"^zrobi[ćc]\b",
-        r"^sprawdzi[ćc]\b",
-        r"^zadzwoni[ćc]\b",
-        r"^napisa[ćc]\b",
-        r"^wys[łl]a[ćc]\b",
-        r"^odebra[ćc]\b",
-        r"^um[oó]wi[ćc]\b",
-        r"^zam[oó]wi[ćc]\b",
-        r"^ogarn[aą][ćc]\b",
-        r"^przygotowa[ćc]\b",
-        r"^doda[ćc]\b",
-        r"^pami[eę]ta[ćc]\b",
-        r"^musz[eę]\b",
-        r"^trzeba\b",
-    ]
-    if any(re.search(p, low) for p in task_patterns):
+    if _looks_like_task(low):
         return "task"
 
     return "note"
@@ -132,6 +155,27 @@ def _kind_label(kind: str) -> str:
         "note": "note",
     }.get((kind or "").strip().lower(), "note")
 
+
+def is_auto_task_candidate(text: str) -> bool:
+    low = (text or "").strip().lower()
+    return _classify_inbox_text(low) == "task" and _has_schedule(low)
+
+
+
+
+def _canonical_key(text: str) -> str:
+    text = _normalize_auto_task_text(text).lower()
+    text = re.sub(r"[^\w\s:.-]", "", text, flags=re.UNICODE)
+    return _normalize_spaces(text)
+
+
+def _find_duplicate_inbox(items: List[Dict[str, Any]], text: str) -> Optional[Dict[str, Any]]:
+    key = _canonical_key(text)
+    for item in items:
+        existing = str(item.get("text") or "").strip()
+        if existing and _canonical_key(existing) == key:
+            return item
+    return None
 
 def load_inbox() -> List[Dict[str, Any]]:
     data = _read_json(INBOX_FILE, default=[])
@@ -170,13 +214,41 @@ def _next_id(items: List[Dict[str, Any]]) -> int:
     return max_id + 1
 
 
+def _reply_from_task_add(out: Any) -> str:
+    if isinstance(out, dict):
+        reply = out.get("reply")
+        if isinstance(reply, str) and reply.strip():
+            return reply.strip()
+        task = out.get("task")
+        if isinstance(task, dict):
+            title = str(task.get("title") or task.get("text") or "zadanie").strip()
+            return f"✅ Dodane zadanie: {title}"
+    if isinstance(out, str) and out.strip():
+        return out.strip()
+    return "✅ Dodane zadanie."
+
+
 def add_inbox(text: str, *, kind: str = "") -> Dict[str, Any]:
     clean = (text or "").strip()
     if not clean:
         return {"ok": False, "reply": "Nie mam czego zapisać do Inbox."}
 
+    # SAFE auto-task: only for obvious task + time/date
+    if is_auto_task_candidate(clean):
+        try:
+            from app.b2c import tasks as tasks_mod
+            out = tasks_mod.add_task(f"dodaj: {clean}")
+            if isinstance(out, dict) and out.get("task"):
+                return {
+                    "ok": True,
+                    "auto_task": True,
+                    "reply": f"⚡ Automatycznie utworzyłam zadanie: {_reply_from_task_add(out)}",
+                    "task": out.get("task"),
+                }
+        except Exception:
+            pass
+
     final_kind = _kind_label(kind or _classify_inbox_text(clean))
-    items = load_inbox()
     item = {
         "id": _next_id(items),
         "text": clean,
@@ -196,7 +268,6 @@ def list_inbox() -> Dict[str, Any]:
     items = load_inbox()
     if not items:
         return {"ok": True, "items": [], "reply": "Inbox jest pusty."}
-
     lines = ["INBOX", ""]
     for idx, item in enumerate(items, start=1):
         lines.append(f"{idx}. [{item['kind']}] {item['text']}")

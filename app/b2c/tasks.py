@@ -13,7 +13,6 @@ TASKS_FILE = DATA_DIR / "tasks.json"
 PENDING_TRAVEL_FILE = DATA_DIR / "pending_travel.json"
 PENDING_CLEAR_FILE = DATA_DIR / "pending_clear.json"
 PENDING_REMINDER_FILE = DATA_DIR / "pending_reminder.json"
-PENDING_CHECKLIST_FILE = DATA_DIR / "pending_checklist.json"
 
 # --- Travel mode parsing ---
 TRAVEL_MODES = {
@@ -222,29 +221,26 @@ def _strip_meta_tokens_from_title(title: str):
 
 
 
-def _infer_location_from_title(title: str) -> Tuple[str, Optional[str]]:
-    raw = (title or "").strip()
-    if not raw:
-        return raw, None
-    tokens = raw.split()
-    if len(tokens) < 3:
-        return raw, None
-    digit_idx = None
-    for i, tok in enumerate(tokens):
-        if re.search(r"\d", tok):
-            digit_idx = i
-            break
-    if digit_idx is None:
-        return raw, None
-    start = max(1, digit_idx - 1)
-    street_markers = {"ul", "ul.", "al", "al.", "aleje", "pl", "pl.", "plac", "os", "os.", "osiedle"}
-    if start - 1 >= 0 and tokens[start - 1].lower() in street_markers:
-        start -= 1
-    title_part = " ".join(tokens[:start]).strip(" ,")
-    loc_part = " ".join(tokens[start:]).strip(" ,")
-    if not title_part or not loc_part or not re.search(r"\d", loc_part):
-        return raw, None
-    return title_part, loc_part
+def _normalize_task_title(title: str) -> str:
+    title = (title or "").strip().lower()
+    title = re.sub(r"\s+", " ", title)
+    return title
+
+
+def _find_duplicate_task(tasks: List[Dict[str, Any]], *, title: str, due_at: str | None, location: str | None, travel_mode: str | None) -> Dict[str, Any] | None:
+    norm_title = _normalize_task_title(title)
+    norm_location = (location or "").strip().lower()
+    norm_travel = (travel_mode or "").strip().lower()
+    for t in tasks:
+        if bool(t.get("done")):
+            continue
+        existing_title = _normalize_task_title(str(t.get("title") or ""))
+        existing_due = str(t.get("due_at") or "") or None
+        existing_location = str(t.get("location") or "").strip().lower()
+        existing_travel = str(t.get("travel_mode") or "").strip().lower()
+        if existing_title == norm_title and existing_due == due_at and existing_location == norm_location and existing_travel == norm_travel:
+            return t
+    return None
 
 def add_task(raw: str) -> Dict[str, Any]:
     """Adds a task. Accepts optional travel mode anywhere in text."""
@@ -287,10 +283,6 @@ def add_task(raw: str) -> Dict[str, Any]:
                 loc_parts.append(tok)
             if loc_parts:
                 location = ", ".join(loc_parts)
-    else:
-        title, inferred_location = _infer_location_from_title(title)
-        if inferred_location:
-            location = inferred_location
 
     if priority is None:
         priority = 2
@@ -305,9 +297,23 @@ def add_task(raw: str) -> Dict[str, Any]:
     elif due_date:
         due_at = due_date
 
+    normalized_title = title if title else "(bez tytułu)"
+    dup = _find_duplicate_task(
+        tasks,
+        title=normalized_title,
+        due_at=due_at,
+        location=location,
+        travel_mode=travel,
+    )
+    if dup:
+        reply = f"⚠️ Zadanie już istnieje #{dup.get('id')}: {dup.get('title')}"
+        if dup.get("due_at"):
+            reply += f" (na {dup.get('due_at')})"
+        return {"reply": reply, "task": dup, "duplicate": True}
+
     task = {
         "id": task_id,
-        "title": title if title else "(bez tytułu)",
+        "title": normalized_title,
         "created_at": _now_iso(),
         "due_at": due_at,
         "done": False,
@@ -324,17 +330,9 @@ def add_task(raw: str) -> Dict[str, Any]:
     tasks.append(task)
     save_tasks_db(db)
 
-    try:
-        due_has_time = bool((task.get("time") or "").strip()) or ("T" in str(task.get("due_at") or ""))
-        has_location = bool((task.get("location") or task.get("location_text") or task.get("address") or "").strip())
-        if due_has_time and has_location:
-            set_pending_travel(task_id, created_from="add")
-    except Exception:
-        pass
-
     reply = f"✅ Dodane zadanie #{task_id}: {task['title']}"
     if due_at:
-        reply += f" (na {due_at.replace('T', ' ')})"
+        reply += f" (na {due_at})"
     if travel:
         reply += f" — dojazd: {travel}"
     return {"reply": reply, "task": task}
@@ -551,25 +549,6 @@ def remove_checklist_item_manual(task_id: int, text: str) -> Optional[Dict[str, 
                 save_tasks_db(db)
                 return t
             return None
-    return None
-
-
-
-def replace_task_checklist(task_id: int, title: str, items_raw: list[str]) -> Optional[Dict[str, Any]]:
-    """Replace whole checklist on a task from a comma-separated command."""
-    title = (title or "").strip().rstrip(":") or "Lista"
-    cleaned: list[Dict[str, Any]] = []
-    for it in (items_raw or []):
-        txt = str(it).strip().lstrip("-").strip()
-        if txt:
-            cleaned.append({"text": txt, "done": False})
-
-    db = load_tasks_db()
-    for t in db["tasks"]:
-        if t.get("id") == task_id:
-            t["checklist"] = {"title": title, "items": cleaned}
-            save_tasks_db(db)
-            return t
     return None
 
 def get_task(task_id: int) -> Optional[Dict[str, Any]]:
