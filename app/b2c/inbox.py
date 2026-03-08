@@ -48,15 +48,29 @@ def _append_record(path: Path, record: Dict[str, Any]) -> None:
 
 
 
-def _bucket_label(kind: str, locative: bool = False) -> str:
+def _bucket_label(kind: str, locative: bool = False, plural: bool = False) -> str:
     k = (kind or '').strip().lower()
     if k == 'idea':
-        return 'pomysłach' if locative else 'pomysł'
+        if locative:
+            return 'pomysłach'
+        if plural:
+            return 'pomysły'
+        return 'pomysł'
     if k == 'note':
-        return 'notatkach' if locative else 'notatkę'
+        if locative:
+            return 'notatkach'
+        if plural:
+            return 'notatki'
+        return 'notatkę'
     if k == 'reminder':
-        return 'reminders' if locative else 'reminder'
-    return 'wpisie' if locative else 'wpis'
+        if locative or plural:
+            return 'reminders'
+        return 'reminder'
+    if locative:
+        return 'wpisach'
+    if plural:
+        return 'wpisy'
+    return 'wpis'
 
 
 def _bucket_path(kind: str) -> Path:
@@ -534,6 +548,58 @@ def delete_bucket_item(kind: str, n: int) -> Dict[str, Any]:
     removed = data.pop(n - 1)
     _save_bucket(kind, data)
     return {"ok": True, "removed": removed, "reply": f"🗑 Usunięto {_bucket_label(kind)} #{n}: {removed['text']}"}
+
+
+def clear_bucket(kind: str) -> Dict[str, Any]:
+    data = _load_bucket(kind)
+    count = len(data)
+    _save_bucket(kind, [])
+    return {
+        "ok": True,
+        "count": count,
+        "reply": f"🧹 Wyczyszczono {_bucket_label(kind, plural=True)} ({count}).",
+    }
+
+
+def move_all_bucket_to_task(kind: str, suffix: str = '') -> Dict[str, Any]:
+    data = _load_bucket(kind)
+    if not data:
+        return {"ok": True, "count": 0, "reply": f"{_bucket_label(kind, plural=True).capitalize()} są puste."}
+
+    moved = []
+    failed = []
+    left = []
+
+    try:
+        from app.b2c import tasks as tasks_mod
+    except Exception:
+        return {"ok": False, "reply": "Nie udało się utworzyć zadań."}
+
+    for idx, item in enumerate(data, start=1):
+        text = str(item.get('text') or '').strip()
+        final_text = text if not suffix.strip() else f"{text} {suffix.strip()}"
+        try:
+            out = tasks_mod.add_task(f"dodaj: {final_text}")
+        except Exception:
+            out = None
+
+        if isinstance(out, dict) and out.get('task'):
+            moved.append(text)
+        else:
+            failed.append((idx, text, _reply_from_task_add(out)))
+            left.append(item)
+
+    _save_bucket(kind, left)
+
+    base = f"📌 Przeniesiono {_bucket_label(kind, plural=True)} do zadań: {len(moved)}"
+    if failed:
+        base += f". Nie udało się: {len(failed)}"
+    return {
+        "ok": len(failed) == 0,
+        "count": len(moved),
+        "failed": failed,
+        "reply": base,
+    }
 
 
 def edit_bucket_item(kind: str, n: int, new_text: str) -> Dict[str, Any]:

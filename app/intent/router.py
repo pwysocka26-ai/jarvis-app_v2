@@ -354,6 +354,23 @@ def route_intent(message: str, persona: str = "b2c", mode: Optional[str] = None,
         out = inbox_mod.list_bucket(inbox_mod.REMINDERS_FILE, "Reminders")
         return _as_reply("reminders_list", out.get("reply", "Reminders są puste."))
 
+    m_bucket_clear = re.match(r"^(?:usu[ńn]\s+wszystko\s+z\s+|wyczy[śs]?[ćc]?\s+)(pomys(?:ł|l)(?:y|ów|ow)?|notatk(?:i|ę|e|ek)|reminders?)\s*$", message, flags=re.I)
+    if m_bucket_clear:
+        from app.b2c import inbox as inbox_mod
+        kind_raw = m_bucket_clear.group(1).lower()
+        kind = "idea" if kind_raw.startswith("pomys") else "note" if kind_raw.startswith("notatk") else "reminder"
+        out = inbox_mod.clear_bucket(kind)
+        return _as_reply("bucket_clear", out.get("reply", "OK"))
+
+    m_bucket_move_all = re.match(r"^przenie[śs]\s+wszystko\s+z\s+(pomys(?:ł|l)ów|notatek|reminders?)\s+do\s+zada[ńn](?:\s+(.+))?$", message, flags=re.I)
+    if m_bucket_move_all:
+        from app.b2c import inbox as inbox_mod
+        kind_raw = m_bucket_move_all.group(1).lower()
+        kind = "idea" if kind_raw.startswith("pomys") else "note" if kind_raw.startswith("notat") else "reminder"
+        suffix = (m_bucket_move_all.group(2) or "").strip()
+        out = inbox_mod.move_all_bucket_to_task(kind, suffix)
+        return _as_reply("bucket_to_task_all", out.get("reply", "OK"))
+
     m_bucket_delete = re.match(r"^usu[ńn]\s+(pomys[łl]|notatk[ęe]|reminder)\s+(\d+)\s*$", message, flags=re.I)
     if m_bucket_delete:
         from app.b2c import inbox as inbox_mod
