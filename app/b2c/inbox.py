@@ -44,6 +44,57 @@ def _append_record(path: Path, record: Dict[str, Any]) -> None:
     _write_json(path, data)
 
 
+
+
+def _normalize_spaces(text: str) -> str:
+    return re.sub(r"\s+", " ", (text or "").strip()).strip()
+
+
+def _normalize_auto_task_text(text: str) -> str:
+    out = _normalize_spaces(text)
+    replacements = [
+        (r"\bjutro rano\b", "jutro 09:00"),
+        (r"\bdziś rano\b", "dziś 09:00"),
+        (r"\bdzis rano\b", "dzis 09:00"),
+        (r"\bjutro wieczorem\b", "jutro 19:00"),
+        (r"\bdziś wieczorem\b", "dziś 19:00"),
+        (r"\bdzis wieczorem\b", "dzis 19:00"),
+        (r"\bjutro po pracy\b", "jutro 18:00"),
+        (r"\bdziś po pracy\b", "dziś 18:00"),
+        (r"\bdzis po pracy\b", "dzis 18:00"),
+        (r"\bpo pracy\b", "dziś 18:00"),
+        (r"\bwieczorem\b", "19:00"),
+        (r"\brano\b", "09:00"),
+        (r"\bpo[ -]?po[łl]udniu\b", "15:00"),
+        (r"\bpopo[łl]udniu\b", "15:00"),
+        (r"\bw sobotę rano\b", "sobota 09:00"),
+        (r"\bw sobote rano\b", "sobota 09:00"),
+        (r"\bw sobotę\b", "sobota 10:00"),
+        (r"\bw sobote\b", "sobota 10:00"),
+        (r"\bw niedzielę rano\b", "niedziela 09:00"),
+        (r"\bw niedziele rano\b", "niedziela 09:00"),
+        (r"\bw niedzielę\b", "niedziela 10:00"),
+        (r"\bw niedziele\b", "niedziela 10:00"),
+    ]
+    for pat, repl in replacements:
+        out = re.sub(pat, repl, out, flags=re.I)
+    return _normalize_spaces(out)
+
+
+def _canonical_key(text: str) -> str:
+    text = _normalize_auto_task_text(text).lower()
+    text = re.sub(r"[^\w\s:.-]", "", text, flags=re.UNICODE)
+    return _normalize_spaces(text)
+
+
+def _find_duplicate_inbox(items: List[Dict[str, Any]], text: str) -> Optional[Dict[str, Any]]:
+    key = _canonical_key(text)
+    for item in items:
+        existing = str(item.get("text") or "").strip()
+        if existing and _canonical_key(existing) == key:
+            return item
+    return None
+
 def _has_schedule(text: str) -> bool:
     low = (text or "").strip().lower()
     schedule_patterns = [
@@ -161,22 +212,6 @@ def is_auto_task_candidate(text: str) -> bool:
     return _classify_inbox_text(low) == "task" and _has_schedule(low)
 
 
-
-
-def _canonical_key(text: str) -> str:
-    text = _normalize_auto_task_text(text).lower()
-    text = re.sub(r"[^\w\s:.-]", "", text, flags=re.UNICODE)
-    return _normalize_spaces(text)
-
-
-def _find_duplicate_inbox(items: List[Dict[str, Any]], text: str) -> Optional[Dict[str, Any]]:
-    key = _canonical_key(text)
-    for item in items:
-        existing = str(item.get("text") or "").strip()
-        if existing and _canonical_key(existing) == key:
-            return item
-    return None
-
 def load_inbox() -> List[Dict[str, Any]]:
     data = _read_json(INBOX_FILE, default=[])
     if not isinstance(data, list):
@@ -229,15 +264,18 @@ def _reply_from_task_add(out: Any) -> str:
 
 
 def add_inbox(text: str, *, kind: str = "") -> Dict[str, Any]:
-    clean = (text or "").strip()
+    clean = _normalize_spaces(text)
     if not clean:
         return {"ok": False, "reply": "Nie mam czego zapisać do Inbox."}
 
-    # SAFE auto-task: only for obvious task + time/date
-    if is_auto_task_candidate(clean):
+    normalized = _normalize_auto_task_text(clean)
+    final_kind = _kind_label(kind or _classify_inbox_text(clean))
+
+    # 1) task + time/date -> create task directly
+    if is_auto_task_candidate(normalized):
         try:
             from app.b2c import tasks as tasks_mod
-            out = tasks_mod.add_task(f"dodaj: {clean}")
+            out = tasks_mod.add_task(f"dodaj: {normalized}")
             if isinstance(out, dict) and out.get("task"):
                 return {
                     "ok": True,
@@ -248,7 +286,54 @@ def add_inbox(text: str, *, kind: str = "") -> Dict[str, Any]:
         except Exception:
             pass
 
-    final_kind = _kind_label(kind or _classify_inbox_text(clean))
+    # 2) ideas / notes / reminders -> direct buckets
+    if final_kind in {"idea", "note", "reminder"}:
+        bucket_path = IDEAS_FILE if final_kind == "idea" else NOTES_FILE if final_kind == "note" else REMINDERS_FILE
+        data = _read_json(bucket_path, default=[])
+        if not isinstance(data, list):
+            data = []
+
+        canon = _canonical_key(clean)
+        for idx, item in enumerate(data, start=1):
+            existing = str(item.get("text") or "").strip()
+            if existing and _canonical_key(existing) == canon:
+                label = "pomysłach" if final_kind == "idea" else "notatkach" if final_kind == "note" else "reminders"
+                return {
+                    "ok": True,
+                    "duplicate": True,
+                    "reply": f"⚠️ To już jest w {label} #{idx}: {existing}",
+                    "item": item,
+                }
+
+        record = {
+            "text": clean,
+            "created_at": _now_iso(),
+            "source": "capture",
+            "kind": final_kind,
+        }
+        data.append(record)
+        _write_json(bucket_path, data)
+
+        if final_kind == "idea":
+            reply = f"💡 Zapisałam do pomysłów: {clean}"
+        elif final_kind == "note":
+            reply = f"📝 Zapisałam do notatek: {clean}"
+        else:
+            reply = f"⏰ Zapisałam do reminders: {clean}"
+
+        return {"ok": True, "direct_bucket": True, "reply": reply, "item": record}
+
+    # 3) task without schedule -> stays in inbox
+    items = load_inbox()
+    dup = _find_duplicate_inbox(items, clean)
+    if dup:
+        return {
+            "ok": True,
+            "duplicate": True,
+            "reply": f"⚠️ To już jest w Inbox #{dup['id']}: {dup['text']}",
+            "item": dup,
+        }
+
     item = {
         "id": _next_id(items),
         "text": clean,
@@ -262,8 +347,6 @@ def add_inbox(text: str, *, kind: str = "") -> Dict[str, Any]:
         "item": item,
         "reply": f"🧠 Zapisano do Inbox #{item['id']} [{item['kind']}]: {item['text']}",
     }
-
-
 def list_inbox() -> Dict[str, Any]:
     items = load_inbox()
     if not items:
@@ -308,15 +391,32 @@ def clear_inbox() -> Dict[str, Any]:
 
 def list_bucket(path: Path, title: str) -> Dict[str, Any]:
     data = _read_json(path, default=[])
+    empty_reply = {
+        "POMYSŁY": "Pomysły są puste.",
+        "NOTATKI": "Notatki są puste.",
+        "REMINDERS": "Reminders są puste.",
+    }.get((title or "").upper(), f"{title} są puste.")
     if not isinstance(data, list) or not data:
-        return {"ok": True, "reply": f"{title} są puste."}
+        return {"ok": True, "reply": empty_reply}
     lines = [title.upper(), ""]
     for idx, item in enumerate(data, start=1):
         text = str(item.get("text") or "").strip()
         if text:
             lines.append(f"{idx}. {text}")
-    return {"ok": True, "reply": "\n".join(lines) if len(lines) > 2 else f"{title} są puste."}
+    return {"ok": True, "reply": "\n".join(lines) if len(lines) > 2 else empty_reply}
 
+
+
+def list_ideas() -> Dict[str, Any]:
+    return list_bucket(IDEAS_FILE, "POMYSŁY")
+
+
+def list_notes() -> Dict[str, Any]:
+    return list_bucket(NOTES_FILE, "NOTATKI")
+
+
+def list_reminders() -> Dict[str, Any]:
+    return list_bucket(REMINDERS_FILE, "REMINDERS")
 
 def process_inbox_item(n: int) -> Dict[str, Any]:
     items = load_inbox()
