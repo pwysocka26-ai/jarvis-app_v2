@@ -923,6 +923,36 @@ def route_intent(message: str, persona: str = "b2c", mode: Optional[str] = None,
             return _as_reply("set_travel_mode", _reply_from_any(out, default="OK"))
         if not _is_command_like(message):
             return _as_reply("set_travel_mode", "Jak jedziesz? Napisz: `samochodem` / `komunikacją` / `rowerem` / `pieszo`.")
+
+    # ===== INBOX v3 PROCESSING =====
+    if low == "przetwórz inbox" or low == "przetworz inbox":
+        from app.b2c import inbox as inbox_mod
+        out = inbox_mod.preview_processing()
+        return _as_reply("inbox_process_preview", out.get("reply", "Inbox jest pusty."))
+
+    if low.startswith("przetwórz inbox ") or low.startswith("przetworz inbox "):
+        from app.b2c import inbox as inbox_mod
+        m = re.search(r"(\d+)$", low)
+        if not m:
+            return _as_reply("inbox_process", "Użyj: `przetwórz inbox 1`.")
+        out = inbox_mod.process_inbox_item(int(m.group(1)))
+        return _as_reply("inbox_process", out.get("reply", "OK"))
+
+    if low == "pomysły" or low == "pomysly":
+        from app.b2c import inbox as inbox_mod
+        out = inbox_mod.list_bucket(inbox_mod.IDEAS_FILE, "Pomysły")
+        return _as_reply("ideas_list", out.get("reply", "Pomysły są puste."))
+
+    if low == "notatki":
+        from app.b2c import inbox as inbox_mod
+        out = inbox_mod.list_bucket(inbox_mod.NOTES_FILE, "Notatki")
+        return _as_reply("notes_list", out.get("reply", "Notatki są puste."))
+
+    if low == "reminders":
+        from app.b2c import inbox as inbox_mod
+        out = inbox_mod.list_bucket(inbox_mod.REMINDERS_FILE, "Reminders")
+        return _as_reply("reminders_list", out.get("reply", "Reminders są puste."))
+
     # CHECKLISTA przypięta do zadania
     # =============================
     def _resolve_task_for_live_number(num: int, d: date | None = None) -> Optional[Dict[str, Any]]:
