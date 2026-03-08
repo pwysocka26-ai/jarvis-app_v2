@@ -34,23 +34,6 @@ PRIORITY_EMOJI = {
 }
 
 
-def _priority_emoji(priority: Any, explicit: bool = False) -> str:
-    """Return a stable emoji prefix for task priority.
-
-    explicit=True keeps the emoji visible also for priorities set manually.
-    For invalid / missing values we return empty string instead of crashing.
-    """
-    try:
-        pr = int(priority)
-    except Exception:
-        return ""
-
-    emoji = PRIORITY_EMOJI.get(pr, "")
-    if not emoji:
-        return ""
-    return f"{emoji} " if explicit or pr in PRIORITY_EMOJI else ""
-
-
 def _task_time_str(t: Dict[str, Any]) -> str:
     """Return HH:MM if task has a concrete due time."""
     v = t.get("time")
@@ -272,6 +255,119 @@ def _extract_date_and_index(parts: List[str], default_date: date) -> Optional[Tu
             return (d, int(parts[2]))
         except Exception:
             return None
+    return None
+
+
+WEEKDAY_MAP = {
+    "poniedzialek": 0,
+    "poniedziałek": 0,
+    "wtorek": 1,
+    "sroda": 2,
+    "środa": 2,
+    "srode": 2,
+    "środę": 2,
+    "czwartek": 3,
+    "piatek": 4,
+    "piątek": 4,
+    "sobota": 5,
+    "sobote": 5,
+    "sobotę": 5,
+    "niedziela": 6,
+    "niedziele": 6,
+    "niedzielę": 6,
+}
+
+
+def _next_weekday_date(name: str) -> Optional[date]:
+    target = WEEKDAY_MAP.get((name or "").strip().lower())
+    if target is None:
+        return None
+    today = date.today()
+    delta = (target - today.weekday()) % 7
+    if delta == 0:
+        delta = 7
+    return today + timedelta(days=delta)
+
+
+def _fmt_time(hh: int, mm: int = 0) -> str:
+    return f"{int(hh):02d}:{int(mm):02d}"
+
+
+def _build_nlp_add_command(message: str) -> Optional[str]:
+    raw = (message or "").strip()
+    if not raw:
+        return None
+
+    low = raw.lower().strip()
+    blocked_prefixes = (
+        "/", "dodaj", "lista", "usun", "usuń", "priorytet", "sort", "ustaw",
+        "tu jestem", "start:", "rano", "diag", "help", "pamiec", "pamięć",
+        "pokaz", "pokaż", "co pamietasz", "co pamiętasz", "zapamietaj",
+        "zapamiętaj", "zapomnij", "gdzie ", "plan dnia", "co dziś", "co dzis",
+        "dzisiaj", "dziś", "pomys", "notatk", "reminders", "inbox", "eta",
+        "czy zdaz", "czy zdąż", "przenies", "przenieś", "edytuj", "wyczysc", "wyczyść",
+    )
+    if low in YES or low in NO or low.startswith(blocked_prefixes):
+        return None
+
+    m = re.match(r"^za\s+(\d+)\s*(h|godz|godzin(?:e|ę|y)?|m|min|mins|minut(?:e|ę|y)?)\s+(.+)$", low, flags=re.I)
+    if m:
+        amount = int(m.group(1))
+        unit = m.group(2)
+        title = raw[m.start(3):].strip(' ,')
+        now = datetime.now().replace(second=0, microsecond=0)
+        if unit.startswith('h') or unit.startswith('godz') or 'godzin' in unit:
+            target = now + timedelta(hours=amount)
+        else:
+            target = now + timedelta(minutes=amount)
+        return f"dodaj: {target.date().isoformat()} {_fmt_time(target.hour, target.minute)} {title}"
+
+    m = re.match(r"^za\s+godzin(?:e|ę)?\s+(.+)$", low, flags=re.I)
+    if m:
+        title = raw[m.start(1):].strip(' ,')
+        target = datetime.now().replace(second=0, microsecond=0) + timedelta(hours=1)
+        return f"dodaj: {target.date().isoformat()} {_fmt_time(target.hour, target.minute)} {title}"
+
+    m = re.match(r"^(?:w\s+)?(poniedziałek|poniedzialek|wtorek|środa|sroda|środę|srode|czwartek|piątek|piatek|sobota|sobotę|sobote|niedziela|niedzielę|niedziele)(?:\s+o)?\s+(\d{1,2})(?::(\d{2}))?\s+(.+)$", raw, flags=re.I)
+    if m:
+        target_date = _next_weekday_date(m.group(1))
+        if target_date:
+            hh = int(m.group(2))
+            mm = int(m.group(3) or 0)
+            title = m.group(4).strip(' ,')
+            return f"dodaj: {target_date.isoformat()} {_fmt_time(hh, mm)} {title}"
+
+    m = re.match(r"^(?:w\s+)?(poniedziałek|poniedzialek|wtorek|środa|sroda|środę|srode|czwartek|piątek|piatek|sobota|sobotę|sobote|niedziela|niedzielę|niedziele)\s+(.+)$", raw, flags=re.I)
+    if m:
+        target_date = _next_weekday_date(m.group(1))
+        if target_date:
+            title = m.group(2).strip(' ,')
+            return f"dodaj: {target_date.isoformat()} {title}"
+
+    m = re.match(r"^(dziś|dzis|jutro)(?:\s+o)?\s+(\d{1,2})(?::(\d{2}))?\s+(.+)$", raw, flags=re.I)
+    if m:
+        day_word = m.group(1).lower()
+        hh = int(m.group(2))
+        mm = int(m.group(3) or 0)
+        title = m.group(4).strip(' ,')
+        return f"dodaj: {day_word} {_fmt_time(hh, mm)} {title}"
+
+    m = re.match(r"^(.+?)\s+(dziś|dzis|jutro)(?:\s+o)?\s+(\d{1,2})(?::(\d{2}))?$", raw, flags=re.I)
+    if m:
+        title = m.group(1).strip(' ,')
+        day_word = m.group(2).lower()
+        hh = int(m.group(3))
+        mm = int(m.group(4) or 0)
+        return f"dodaj: {day_word} {_fmt_time(hh, mm)} {title}"
+
+    m = re.match(r"^(\d{1,2})(?::(\d{2}))?\s+(.+)$", raw, flags=re.I)
+    if m:
+        hh = int(m.group(1))
+        mm = int(m.group(2) or 0)
+        title = m.group(3).strip(' ,')
+        if 0 <= hh <= 23 and 0 <= mm <= 59 and len(title) >= 2:
+            return f"dodaj: dziś {_fmt_time(hh, mm)} {title}"
+
     return None
 
 
@@ -1035,6 +1131,12 @@ def route_intent(message: str, persona: str = "b2c", mode: Optional[str] = None,
         ok = tasks_mod.add_checklist_item_manual(int(task_live.get("id")), item_text) if hasattr(tasks_mod, "add_checklist_item_manual") else None
         return _as_reply("checklist", f"✅ Dodano: {item_text}" if ok else "Nie udało się dodać pozycji.")
 
+    # NLP TASK INPUT (v9)
+    synthetic_add = _build_nlp_add_command(message)
+    if synthetic_add:
+        message = synthetic_add
+        low = message.strip().lower()
+
     # DODAJ (spójny numer LIVE z listą)
     # =============================
     if low.startswith("dodaj:") or low.startswith("dodaj "):
@@ -1170,13 +1272,10 @@ def route_intent(message: str, persona: str = "b2c", mode: Optional[str] = None,
             emoji = _priority_emoji(pr, bool(t.get("priority_explicit")))
     
             eta_s = ""
-            travel_mode = t.get("travel_mode") or t.get("mode") or _get_place("travel_mode_default")
+            travel_mode = t.get("travel_mode") or t.get("mode")
             gm = _google_mode_from_task(str(travel_mode or ""))
             if api_key_present and origin and loc and gm:
-                try:
-                    mins = get_eta_minutes(origin=origin, destination=str(loc), mode=gm)
-                except Exception:
-                    mins = None
+                mins = get_eta_minutes(origin=origin, destination=str(loc), mode=gm)
                 if mins is not None:
                     eta_s = f" (ETA: {mins} min)"
     
