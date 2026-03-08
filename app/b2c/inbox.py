@@ -219,6 +219,15 @@ def get_inbox_by_live_number(n: int) -> Optional[Dict[str, Any]]:
     return items[n - 1]
 
 
+def pop_inbox_by_live_number(n: int) -> Optional[Dict[str, Any]]:
+    items = load_inbox()
+    if n < 1 or n > len(items):
+        return None
+    item = items.pop(n - 1)
+    save_inbox(items)
+    return item
+
+
 def clear_inbox() -> Dict[str, Any]:
     items = load_inbox()
     count = len(items)
@@ -243,6 +252,17 @@ def process_inbox_item(n: int) -> Dict[str, Any]:
     if n < 1 or n > len(items):
         return {"ok": False, "reply": f"Nie ma wpisu #{n} w Inbox."}
 
+    item = items[n - 1]
+    kind = _kind_label(item.get("kind") or _classify_inbox_text(item.get("text", "")))
+
+    if kind == "task":
+        return {
+            "ok": True,
+            "kind": "task",
+            "reply": f"📌 To wpis typu task: {item['text']}\nUżyj: `utwórz zadanie z inbox {n} dziś 15:00` albo `utwórz zadanie z inbox {n} jutro`.",
+            "item": item,
+        }
+
     item = items.pop(n - 1)
     save_inbox(items)
 
@@ -251,10 +271,9 @@ def process_inbox_item(n: int) -> Dict[str, Any]:
         "created_at": item.get("created_at") or _now_iso(),
         "processed_at": _now_iso(),
         "source": "inbox",
-        "kind": item.get("kind") or _classify_inbox_text(item["text"]),
+        "kind": kind,
     }
 
-    kind = _kind_label(record["kind"])
     if kind == "idea":
         _append_record(IDEAS_FILE, record)
         return {"ok": True, "reply": f"💡 Przeniesiono do pomysłów: {record['text']}", "item": record}
@@ -265,9 +284,7 @@ def process_inbox_item(n: int) -> Dict[str, Any]:
         _append_record(REMINDERS_FILE, record)
         return {"ok": True, "reply": f"⏰ Przeniesiono do reminders: {record['text']}", "item": record}
 
-    # task stays for router conversion flow or can be listed as pending task-candidate
-    _append_record(NOTES_FILE, {**record, "kind": "task-candidate"})
-    return {"ok": True, "reply": f"✅ Oznaczono jako kandydat na zadanie: {record['text']}", "item": record}
+    return {"ok": False, "reply": "Nie udało się przetworzyć wpisu."}
 
 
 def preview_processing() -> Dict[str, Any]:
@@ -278,7 +295,7 @@ def preview_processing() -> Dict[str, Any]:
     for idx, item in enumerate(items, start=1):
         kind = _kind_label(item.get("kind") or _classify_inbox_text(item.get("text", "")))
         action = {
-            "task": "→ kandydat na zadanie",
+            "task": "→ utwórz zadanie przez komendę",
             "idea": "→ pomysły",
             "reminder": "→ reminders",
             "note": "→ notatki",

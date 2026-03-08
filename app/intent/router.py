@@ -924,6 +924,26 @@ def route_intent(message: str, persona: str = "b2c", mode: Optional[str] = None,
         if not _is_command_like(message):
             return _as_reply("set_travel_mode", "Jak jedziesz? Napisz: `samochodem` / `komunikacją` / `rowerem` / `pieszo`.")
 
+
+    # ===== INBOX v4 TASK CONVERSION =====
+    m_create_task = re.match(r"^utw[oó]rz zadanie z inbox\s+(\d+)\s+(.+)$", message, flags=re.I)
+    if m_create_task:
+        from app.b2c import inbox as inbox_mod
+        n = int(m_create_task.group(1))
+        suffix = m_create_task.group(2).strip()
+        item = inbox_mod.get_inbox_by_live_number(n)
+        if not item:
+            return _as_reply("inbox_to_task", f"Nie ma wpisu #{n} w Inbox.")
+        kind = str(item.get("kind") or "").strip().lower()
+        if kind and kind != "task":
+            return _as_reply("inbox_to_task", f"Wpis #{n} ma typ `{kind}`. Dla tasków użyj wpisu typu `[task]`.")
+        synthetic = f"dodaj: {item['text']} {suffix}".strip()
+        out = tasks_mod.add_task(synthetic)
+        task = out.get("task") if isinstance(out, dict) else None
+        if isinstance(task, dict):
+            inbox_mod.pop_inbox_by_live_number(n)
+        return _as_reply("inbox_to_task", _reply_from_any(out, default="OK"))
+
     # ===== INBOX v3 PROCESSING =====
     if low == "przetwórz inbox" or low == "przetworz inbox":
         from app.b2c import inbox as inbox_mod
