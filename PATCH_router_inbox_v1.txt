@@ -1,0 +1,42 @@
+# Wklej ten blok do app/intent/router.py tuż przed sekcją "CHECKLISTA przypięta do zadania"
+
+    # =============================
+    # INBOX v1
+    # =============================
+    if low.startswith("zapisz:"):
+        from app.b2c import inbox as inbox_mod
+        text = message.split(":", 1)[1].strip()
+        out = inbox_mod.add_inbox(text)
+        return _as_reply("inbox_add", out.get("reply", "OK"))
+
+    if low == "inbox":
+        from app.b2c import inbox as inbox_mod
+        out = inbox_mod.list_inbox()
+        return _as_reply("inbox_list", out.get("reply", "Inbox jest pusty."))
+
+    if low.startswith("usuń z inbox") or low.startswith("usun z inbox"):
+        from app.b2c import inbox as inbox_mod
+        m = re.search(r"(\d+)$", low)
+        if not m:
+            return _as_reply("inbox_delete", "Użyj: `usuń z inbox 1`.")
+        out = inbox_mod.delete_inbox_by_live_number(int(m.group(1)))
+        return _as_reply("inbox_delete", out.get("reply", "OK"))
+
+    if low in {"/reset_inbox", "wyczyść inbox", "wyczysc inbox"}:
+        from app.b2c import inbox as inbox_mod
+        out = inbox_mod.clear_inbox()
+        return _as_reply("inbox_clear", out.get("reply", "OK"))
+
+    m_inbox_to_task = re.match(r"^zamie[nń]\s+inbox\s+(\d+)\s+na\s+zadanie\s+(.+)$", message, flags=re.I)
+    if m_inbox_to_task:
+        from app.b2c import inbox as inbox_mod
+        n = int(m_inbox_to_task.group(1))
+        suffix = m_inbox_to_task.group(2).strip()
+        item = inbox_mod.get_inbox_by_live_number(n)
+        if not item:
+            return _as_reply("inbox_to_task", f"Nie ma wpisu #{n} w Inbox.")
+        synthetic = f"dodaj: {item['text']} {suffix}".strip()
+        out = tasks_mod.add_task(synthetic)
+        if isinstance(out, dict) and out.get("task"):
+            inbox_mod.delete_inbox_by_live_number(n)
+        return _as_reply("inbox_to_task", _reply_from_any(out, default="OK"))
