@@ -34,6 +34,23 @@ PRIORITY_EMOJI = {
 }
 
 
+def _priority_emoji(priority: Any, explicit: bool = False) -> str:
+    """Return a stable emoji prefix for task priority.
+
+    explicit=True keeps the emoji visible also for priorities set manually.
+    For invalid / missing values we return empty string instead of crashing.
+    """
+    try:
+        pr = int(priority)
+    except Exception:
+        return ""
+
+    emoji = PRIORITY_EMOJI.get(pr, "")
+    if not emoji:
+        return ""
+    return f"{emoji} " if explicit or pr in PRIORITY_EMOJI else ""
+
+
 def _task_time_str(t: Dict[str, Any]) -> str:
     """Return HH:MM if task has a concrete due time."""
     v = t.get("time")
@@ -336,65 +353,6 @@ def route_intent(message: str, persona: str = "b2c", mode: Optional[str] = None,
         if isinstance(out, dict) and out.get("task"):
             inbox_mod.delete_inbox_by_live_number(n)
         return _as_reply("inbox_to_task", _reply_from_any(out, default="OK"))
-
-
-    # ===== INBOX v7.2 BUCKETS =====
-    if low in {"pomysły", "pomysly", "pomysł", "pomysl"}:
-        from app.b2c import inbox as inbox_mod
-        out = inbox_mod.list_bucket(inbox_mod.IDEAS_FILE, "Pomysły")
-        return _as_reply("ideas_list", out.get("reply", "Pomysły są puste."))
-
-    if low in {"notatki", "notatka"}:
-        from app.b2c import inbox as inbox_mod
-        out = inbox_mod.list_bucket(inbox_mod.NOTES_FILE, "Notatki")
-        return _as_reply("notes_list", out.get("reply", "Notatki są puste."))
-
-    if low in {"reminders", "reminder"}:
-        from app.b2c import inbox as inbox_mod
-        out = inbox_mod.list_bucket(inbox_mod.REMINDERS_FILE, "Reminders")
-        return _as_reply("reminders_list", out.get("reply", "Reminders są puste."))
-
-    m_bucket_clear = re.match(r"^(?:usu[ńn]\s+wszystko\s+z\s+|wyczy[śs]?[ćc]?\s+)(pomys(?:ł|l)(?:y|ów|ow)?|notatk(?:i|ę|e|ek)|reminders?)\s*$", message, flags=re.I)
-    if m_bucket_clear:
-        from app.b2c import inbox as inbox_mod
-        kind_raw = m_bucket_clear.group(1).lower()
-        kind = "idea" if kind_raw.startswith("pomys") else "note" if kind_raw.startswith("notatk") else "reminder"
-        out = inbox_mod.clear_bucket(kind)
-        return _as_reply("bucket_clear", out.get("reply", "OK"))
-
-    m_bucket_move_all = re.match(r"^przenie[śs]\s+wszystko\s+z\s+(pomys(?:ł|l)ów|notatek|reminders?)\s+do\s+zada[ńn](?:\s+(.+))?$", message, flags=re.I)
-    if m_bucket_move_all:
-        from app.b2c import inbox as inbox_mod
-        kind_raw = m_bucket_move_all.group(1).lower()
-        kind = "idea" if kind_raw.startswith("pomys") else "note" if kind_raw.startswith("notat") else "reminder"
-        suffix = (m_bucket_move_all.group(2) or "").strip()
-        out = inbox_mod.move_all_bucket_to_task(kind, suffix)
-        return _as_reply("bucket_to_task_all", out.get("reply", "OK"))
-
-    m_bucket_delete = re.match(r"^usu[ńn]\s+(pomys[łl]|notatk[ęe]|reminder)\s+(\d+)\s*$", message, flags=re.I)
-    if m_bucket_delete:
-        from app.b2c import inbox as inbox_mod
-        kind_raw = m_bucket_delete.group(1).lower()
-        kind = "idea" if kind_raw.startswith("pomys") else "note" if kind_raw.startswith("notatk") else "reminder"
-        out = inbox_mod.delete_bucket_item(kind, int(m_bucket_delete.group(2)))
-        return _as_reply("bucket_delete", out.get("reply", "OK"))
-
-    m_bucket_edit = re.match(r"^edytuj\s+(pomys[łl]|notatk[ęe]|reminder)\s+(\d+)\s+(.+)$", message, flags=re.I)
-    if m_bucket_edit:
-        from app.b2c import inbox as inbox_mod
-        kind_raw = m_bucket_edit.group(1).lower()
-        kind = "idea" if kind_raw.startswith("pomys") else "note" if kind_raw.startswith("notatk") else "reminder"
-        out = inbox_mod.edit_bucket_item(kind, int(m_bucket_edit.group(2)), m_bucket_edit.group(3).strip())
-        return _as_reply("bucket_edit", out.get("reply", "OK"))
-
-    m_bucket_move = re.match(r"^przenie[śs]\s+(pomys[łl]|notatk[ęe]|reminder)\s+(\d+)\s+do\s+zadania(?:\s+(.+))?$", message, flags=re.I)
-    if m_bucket_move:
-        from app.b2c import inbox as inbox_mod
-        kind_raw = m_bucket_move.group(1).lower()
-        kind = "idea" if kind_raw.startswith("pomys") else "note" if kind_raw.startswith("notatk") else "reminder"
-        suffix = (m_bucket_move.group(3) or "").strip()
-        out = inbox_mod.move_bucket_item_to_task(kind, int(m_bucket_move.group(2)), suffix)
-        return _as_reply("bucket_to_task", out.get("reply", "OK"))
 
 
     def _is_command_like(txt: str) -> bool:
@@ -1017,6 +975,20 @@ def route_intent(message: str, persona: str = "b2c", mode: Optional[str] = None,
         out = inbox_mod.process_inbox_item(int(m.group(1)))
         return _as_reply("inbox_process", out.get("reply", "OK"))
 
+    if low == "pomysły" or low == "pomysly":
+        from app.b2c import inbox as inbox_mod
+        out = inbox_mod.list_bucket(inbox_mod.IDEAS_FILE, "Pomysły")
+        return _as_reply("ideas_list", out.get("reply", "Pomysły są puste."))
+
+    if low == "notatki":
+        from app.b2c import inbox as inbox_mod
+        out = inbox_mod.list_bucket(inbox_mod.NOTES_FILE, "Notatki")
+        return _as_reply("notes_list", out.get("reply", "Notatki są puste."))
+
+    if low == "reminders":
+        from app.b2c import inbox as inbox_mod
+        out = inbox_mod.list_bucket(inbox_mod.REMINDERS_FILE, "Reminders")
+        return _as_reply("reminders_list", out.get("reply", "Reminders są puste."))
 
     # CHECKLISTA przypięta do zadania
     # =============================
@@ -1198,10 +1170,13 @@ def route_intent(message: str, persona: str = "b2c", mode: Optional[str] = None,
             emoji = _priority_emoji(pr, bool(t.get("priority_explicit")))
     
             eta_s = ""
-            travel_mode = t.get("travel_mode") or t.get("mode")
+            travel_mode = t.get("travel_mode") or t.get("mode") or _get_place("travel_mode_default")
             gm = _google_mode_from_task(str(travel_mode or ""))
             if api_key_present and origin and loc and gm:
-                mins = get_eta_minutes(origin=origin, destination=str(loc), mode=gm)
+                try:
+                    mins = get_eta_minutes(origin=origin, destination=str(loc), mode=gm)
+                except Exception:
+                    mins = None
                 if mins is not None:
                     eta_s = f" (ETA: {mins} min)"
     
