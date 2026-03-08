@@ -46,6 +46,62 @@ def _append_record(path: Path, record: Dict[str, Any]) -> None:
 
 
 
+
+
+def _bucket_label(kind: str, locative: bool = False) -> str:
+    k = (kind or '').strip().lower()
+    if k == 'idea':
+        return 'pomysłach' if locative else 'pomysł'
+    if k == 'note':
+        return 'notatkach' if locative else 'notatkę'
+    if k == 'reminder':
+        return 'reminders' if locative else 'reminder'
+    return 'wpisie' if locative else 'wpis'
+
+
+def _bucket_path(kind: str) -> Path:
+    k = (kind or '').strip().lower()
+    if k == 'idea':
+        return IDEAS_FILE
+    if k == 'note':
+        return NOTES_FILE
+    if k == 'reminder':
+        return REMINDERS_FILE
+    raise ValueError(f'Unsupported bucket kind: {kind}')
+
+
+def _load_bucket(kind: str) -> List[Dict[str, Any]]:
+    data = _read_json(_bucket_path(kind), default=[])
+    if not isinstance(data, list):
+        return []
+    out: List[Dict[str, Any]] = []
+    for item in data:
+        if not isinstance(item, dict):
+            continue
+        text = str(item.get('text') or '').strip()
+        if not text:
+            continue
+        fixed = dict(item)
+        fixed['text'] = text
+        fixed['kind'] = kind
+        out.append(fixed)
+    return out
+
+
+def _save_bucket(kind: str, data: List[Dict[str, Any]]) -> None:
+    _write_json(_bucket_path(kind), data)
+
+
+def _bucket_duplicate_index(kind: str, text: str, *, ignore_index: Optional[int] = None) -> Optional[int]:
+    canon = _canonical_key(text)
+    for idx, item in enumerate(_load_bucket(kind), start=1):
+        if ignore_index is not None and idx == ignore_index:
+            continue
+        existing = str(item.get('text') or '').strip()
+        if existing and _canonical_key(existing) == canon:
+            return idx
+    return None
+
 def _normalize_spaces(text: str) -> str:
     return re.sub(r"\s+", " ", (text or "").strip()).strip()
 
@@ -288,22 +344,16 @@ def add_inbox(text: str, *, kind: str = "") -> Dict[str, Any]:
 
     # 2) ideas / notes / reminders -> direct buckets
     if final_kind in {"idea", "note", "reminder"}:
-        bucket_path = IDEAS_FILE if final_kind == "idea" else NOTES_FILE if final_kind == "note" else REMINDERS_FILE
-        data = _read_json(bucket_path, default=[])
-        if not isinstance(data, list):
-            data = []
-
-        canon = _canonical_key(clean)
-        for idx, item in enumerate(data, start=1):
-            existing = str(item.get("text") or "").strip()
-            if existing and _canonical_key(existing) == canon:
-                label = "pomysłach" if final_kind == "idea" else "notatkach" if final_kind == "note" else "reminders"
-                return {
-                    "ok": True,
-                    "duplicate": True,
-                    "reply": f"⚠️ To już jest w {label} #{idx}: {existing}",
-                    "item": item,
-                }
+        dup_idx = _bucket_duplicate_index(final_kind, clean)
+        if dup_idx is not None:
+            label = _bucket_label(final_kind, locative=True)
+            existing = _load_bucket(final_kind)[dup_idx - 1]
+            return {
+                "ok": True,
+                "duplicate": True,
+                "reply": f"⚠️ To już jest w {label} #{dup_idx}: {existing['text']}",
+                "item": existing,
+            }
 
         record = {
             "text": clean,
@@ -311,8 +361,9 @@ def add_inbox(text: str, *, kind: str = "") -> Dict[str, Any]:
             "source": "capture",
             "kind": final_kind,
         }
+        data = _load_bucket(final_kind)
         data.append(record)
-        _write_json(bucket_path, data)
+        _save_bucket(final_kind, data)
 
         if final_kind == "idea":
             reply = f"💡 Zapisałam do pomysłów: {clean}"
@@ -399,47 +450,12 @@ def list_bucket(path: Path, title: str) -> Dict[str, Any]:
     if not isinstance(data, list) or not data:
         return {"ok": True, "reply": empty_reply}
     lines = [title.upper(), ""]
-    visible = 0
     for idx, item in enumerate(data, start=1):
         text = str(item.get("text") or "").strip()
         if text:
             lines.append(f"{idx}. {text}")
-            visible += 1
-    return {"ok": True, "reply": "\n".join(lines) if visible else empty_reply}
+    return {"ok": True, "reply": "\n".join(lines) if len(lines) > 2 else empty_reply}
 
-
-def delete_bucket_item(path: Path, title: str, n: int) -> Dict[str, Any]:
-    data = _read_json(path, default=[])
-    singular_remove = {
-        "POMYSŁY": "pomysł",
-        "NOTATKI": "notatkę",
-        "REMINDERS": "reminder",
-    }.get((title or "").upper(), "wpis")
-    singular_missing = {
-        "POMYSŁY": "pomysłu",
-        "NOTATKI": "notatki",
-        "REMINDERS": "remindera",
-    }.get((title or "").upper(), "wpisu")
-    bucket_label = {
-        "POMYSŁY": "pomysłów",
-        "NOTATKI": "notatek",
-        "REMINDERS": "reminders",
-    }.get((title or "").upper(), title)
-
-    if not isinstance(data, list) or not data:
-        return {"ok": False, "reply": f"Lista {bucket_label} jest pusta."}
-    if n < 1 or n > len(data):
-        return {"ok": False, "reply": f"Nie ma {singular_missing} #{n}."}
-
-    removed = data.pop(n - 1)
-    _write_json(path, data)
-    text = str((removed or {}).get("text") or "").strip()
-    suffix = f": {text}" if text else ""
-    return {
-        "ok": True,
-        "removed": removed,
-        "reply": f"🗑 Usunięto {singular_remove} #{n}{suffix}",
-    }
 
 
 def list_ideas() -> Dict[str, Any]:
@@ -509,3 +525,56 @@ def preview_processing() -> Dict[str, Any]:
         lines.append(f"{idx}. [{kind}] {item['text']}")
         lines.append(f"   {action}")
     return {"ok": True, "reply": "\n".join(lines)}
+
+
+def delete_bucket_item(kind: str, n: int) -> Dict[str, Any]:
+    data = _load_bucket(kind)
+    if n < 1 or n > len(data):
+        return {"ok": False, "reply": f"Nie ma wpisu #{n} w bucketcie."}
+    removed = data.pop(n - 1)
+    _save_bucket(kind, data)
+    return {"ok": True, "removed": removed, "reply": f"🗑 Usunięto {_bucket_label(kind)} #{n}: {removed['text']}"}
+
+
+def edit_bucket_item(kind: str, n: int, new_text: str) -> Dict[str, Any]:
+    clean = _normalize_spaces(new_text)
+    if not clean:
+        return {"ok": False, "reply": "Podaj nową treść po numerze."}
+    data = _load_bucket(kind)
+    if n < 1 or n > len(data):
+        return {"ok": False, "reply": f"Nie ma wpisu #{n} w bucketcie."}
+    dup_idx = _bucket_duplicate_index(kind, clean, ignore_index=n)
+    if dup_idx is not None:
+        existing = data[dup_idx - 1]
+        label = _bucket_label(kind, locative=True)
+        return {"ok": False, "duplicate": True, "reply": f"⚠️ Taki wpis już jest w {label} #{dup_idx}: {existing['text']}"}
+    before = str(data[n - 1].get('text') or '').strip()
+    data[n - 1]['text'] = clean
+    data[n - 1]['updated_at'] = _now_iso()
+    _save_bucket(kind, data)
+    return {"ok": True, "item": data[n - 1], "reply": f"✏️ Zmieniono {_bucket_label(kind)} #{n}: {before} → {clean}"}
+
+
+def move_bucket_item_to_task(kind: str, n: int, suffix: str = '') -> Dict[str, Any]:
+    data = _load_bucket(kind)
+    if n < 1 or n > len(data):
+        return {"ok": False, "reply": f"Nie ma wpisu #{n} w bucketcie."}
+    item = data[n - 1]
+    text = str(item.get('text') or '').strip()
+    final_text = text if not suffix.strip() else f"{text} {suffix.strip()}"
+    try:
+        from app.b2c import tasks as tasks_mod
+        out = tasks_mod.add_task(f"dodaj: {final_text}")
+    except Exception:
+        return {"ok": False, "reply": "Nie udało się utworzyć zadania."}
+    if isinstance(out, dict) and out.get('task'):
+        removed = data.pop(n - 1)
+        _save_bucket(kind, data)
+        return {
+            "ok": True,
+            "removed": removed,
+            "task": out.get('task'),
+            "reply": f"📌 Przeniesiono {_bucket_label(kind)} #{n} do zadania: {_reply_from_task_add(out)}",
+        }
+    reply = _reply_from_task_add(out)
+    return {"ok": False, "reply": reply}

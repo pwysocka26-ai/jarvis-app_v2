@@ -338,6 +338,48 @@ def route_intent(message: str, persona: str = "b2c", mode: Optional[str] = None,
         return _as_reply("inbox_to_task", _reply_from_any(out, default="OK"))
 
 
+    # ===== INBOX v7.2 BUCKETS =====
+    if low in {"pomysły", "pomysly", "pomysł", "pomysl"}:
+        from app.b2c import inbox as inbox_mod
+        out = inbox_mod.list_bucket(inbox_mod.IDEAS_FILE, "Pomysły")
+        return _as_reply("ideas_list", out.get("reply", "Pomysły są puste."))
+
+    if low in {"notatki", "notatka"}:
+        from app.b2c import inbox as inbox_mod
+        out = inbox_mod.list_bucket(inbox_mod.NOTES_FILE, "Notatki")
+        return _as_reply("notes_list", out.get("reply", "Notatki są puste."))
+
+    if low in {"reminders", "reminder"}:
+        from app.b2c import inbox as inbox_mod
+        out = inbox_mod.list_bucket(inbox_mod.REMINDERS_FILE, "Reminders")
+        return _as_reply("reminders_list", out.get("reply", "Reminders są puste."))
+
+    m_bucket_delete = re.match(r"^usu[ńn]\s+(pomys[łl]|notatk[ęe]|reminder)\s+(\d+)\s*$", message, flags=re.I)
+    if m_bucket_delete:
+        from app.b2c import inbox as inbox_mod
+        kind_raw = m_bucket_delete.group(1).lower()
+        kind = "idea" if kind_raw.startswith("pomys") else "note" if kind_raw.startswith("notatk") else "reminder"
+        out = inbox_mod.delete_bucket_item(kind, int(m_bucket_delete.group(2)))
+        return _as_reply("bucket_delete", out.get("reply", "OK"))
+
+    m_bucket_edit = re.match(r"^edytuj\s+(pomys[łl]|notatk[ęe]|reminder)\s+(\d+)\s+(.+)$", message, flags=re.I)
+    if m_bucket_edit:
+        from app.b2c import inbox as inbox_mod
+        kind_raw = m_bucket_edit.group(1).lower()
+        kind = "idea" if kind_raw.startswith("pomys") else "note" if kind_raw.startswith("notatk") else "reminder"
+        out = inbox_mod.edit_bucket_item(kind, int(m_bucket_edit.group(2)), m_bucket_edit.group(3).strip())
+        return _as_reply("bucket_edit", out.get("reply", "OK"))
+
+    m_bucket_move = re.match(r"^przenie[śs]\s+(pomys[łl]|notatk[ęe]|reminder)\s+(\d+)\s+do\s+zadania(?:\s+(.+))?$", message, flags=re.I)
+    if m_bucket_move:
+        from app.b2c import inbox as inbox_mod
+        kind_raw = m_bucket_move.group(1).lower()
+        kind = "idea" if kind_raw.startswith("pomys") else "note" if kind_raw.startswith("notatk") else "reminder"
+        suffix = (m_bucket_move.group(3) or "").strip()
+        out = inbox_mod.move_bucket_item_to_task(kind, int(m_bucket_move.group(2)), suffix)
+        return _as_reply("bucket_to_task", out.get("reply", "OK"))
+
+
     def _is_command_like(txt: str) -> bool:
         t = (txt or "").strip().lower()
         return (
@@ -614,27 +656,6 @@ def route_intent(message: str, persona: str = "b2c", mode: Optional[str] = None,
         emoji = PRIORITY_EMOJI.get(pr, f"p{pr}")
         return _as_reply("set_priority", f"✅ Ustawiono priorytet {emoji} dla zadania #{n} na {_label_for_date(target_date)}.")
 
-
-    # =============================
-    # INBOX BUCKET DELETE
-    # usuń pomysł 2 / usuń notatkę 1 / usuń reminder 2
-    # =============================
-    m_bucket_delete = re.match(r"^usu[nń]\s+(pomys[łl]|notatk[ęe]|reminder)\s+(\d+)\s*$", low, flags=re.I)
-    if m_bucket_delete:
-        from app.b2c import inbox as inbox_mod
-        kind = m_bucket_delete.group(1).lower()
-        n = int(m_bucket_delete.group(2))
-
-        if kind.startswith("pomys"):
-            out = inbox_mod.delete_bucket_item(inbox_mod.IDEAS_FILE, "POMYSŁY", n)
-            return _as_reply("idea_delete", out.get("reply", "OK"))
-
-        if kind.startswith("notatk"):
-            out = inbox_mod.delete_bucket_item(inbox_mod.NOTES_FILE, "NOTATKI", n)
-            return _as_reply("note_delete", out.get("reply", "OK"))
-
-        out = inbox_mod.delete_bucket_item(inbox_mod.REMINDERS_FILE, "REMINDERS", n)
-        return _as_reply("reminder_delete", out.get("reply", "OK"))
 
     # =============================
     # DEV / RESET DZIŚ
@@ -979,20 +1000,6 @@ def route_intent(message: str, persona: str = "b2c", mode: Optional[str] = None,
         out = inbox_mod.process_inbox_item(int(m.group(1)))
         return _as_reply("inbox_process", out.get("reply", "OK"))
 
-    if low == "pomysły" or low == "pomysly":
-        from app.b2c import inbox as inbox_mod
-        out = inbox_mod.list_bucket(inbox_mod.IDEAS_FILE, "Pomysły")
-        return _as_reply("ideas_list", out.get("reply", "Pomysły są puste."))
-
-    if low == "notatki":
-        from app.b2c import inbox as inbox_mod
-        out = inbox_mod.list_bucket(inbox_mod.NOTES_FILE, "Notatki")
-        return _as_reply("notes_list", out.get("reply", "Notatki są puste."))
-
-    if low == "reminders":
-        from app.b2c import inbox as inbox_mod
-        out = inbox_mod.list_bucket(inbox_mod.REMINDERS_FILE, "Reminders")
-        return _as_reply("reminders_list", out.get("reply", "Reminders są puste."))
 
     # CHECKLISTA przypięta do zadania
     # =============================
