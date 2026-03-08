@@ -399,12 +399,47 @@ def list_bucket(path: Path, title: str) -> Dict[str, Any]:
     if not isinstance(data, list) or not data:
         return {"ok": True, "reply": empty_reply}
     lines = [title.upper(), ""]
+    visible = 0
     for idx, item in enumerate(data, start=1):
         text = str(item.get("text") or "").strip()
         if text:
             lines.append(f"{idx}. {text}")
-    return {"ok": True, "reply": "\n".join(lines) if len(lines) > 2 else empty_reply}
+            visible += 1
+    return {"ok": True, "reply": "\n".join(lines) if visible else empty_reply}
 
+
+def delete_bucket_item(path: Path, title: str, n: int) -> Dict[str, Any]:
+    data = _read_json(path, default=[])
+    singular_remove = {
+        "POMYSŁY": "pomysł",
+        "NOTATKI": "notatkę",
+        "REMINDERS": "reminder",
+    }.get((title or "").upper(), "wpis")
+    singular_missing = {
+        "POMYSŁY": "pomysłu",
+        "NOTATKI": "notatki",
+        "REMINDERS": "remindera",
+    }.get((title or "").upper(), "wpisu")
+    bucket_label = {
+        "POMYSŁY": "pomysłów",
+        "NOTATKI": "notatek",
+        "REMINDERS": "reminders",
+    }.get((title or "").upper(), title)
+
+    if not isinstance(data, list) or not data:
+        return {"ok": False, "reply": f"Lista {bucket_label} jest pusta."}
+    if n < 1 or n > len(data):
+        return {"ok": False, "reply": f"Nie ma {singular_missing} #{n}."}
+
+    removed = data.pop(n - 1)
+    _write_json(path, data)
+    text = str((removed or {}).get("text") or "").strip()
+    suffix = f": {text}" if text else ""
+    return {
+        "ok": True,
+        "removed": removed,
+        "reply": f"🗑 Usunięto {singular_remove} #{n}{suffix}",
+    }
 
 
 def list_ideas() -> Dict[str, Any]:

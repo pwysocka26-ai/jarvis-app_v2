@@ -616,6 +616,27 @@ def route_intent(message: str, persona: str = "b2c", mode: Optional[str] = None,
 
 
     # =============================
+    # INBOX BUCKET DELETE
+    # usuń pomysł 2 / usuń notatkę 1 / usuń reminder 2
+    # =============================
+    m_bucket_delete = re.match(r"^usu[nń]\s+(pomys[łl]|notatk[ęe]|reminder)\s+(\d+)\s*$", low, flags=re.I)
+    if m_bucket_delete:
+        from app.b2c import inbox as inbox_mod
+        kind = m_bucket_delete.group(1).lower()
+        n = int(m_bucket_delete.group(2))
+
+        if kind.startswith("pomys"):
+            out = inbox_mod.delete_bucket_item(inbox_mod.IDEAS_FILE, "POMYSŁY", n)
+            return _as_reply("idea_delete", out.get("reply", "OK"))
+
+        if kind.startswith("notatk"):
+            out = inbox_mod.delete_bucket_item(inbox_mod.NOTES_FILE, "NOTATKI", n)
+            return _as_reply("note_delete", out.get("reply", "OK"))
+
+        out = inbox_mod.delete_bucket_item(inbox_mod.REMINDERS_FILE, "REMINDERS", n)
+        return _as_reply("reminder_delete", out.get("reply", "OK"))
+
+    # =============================
     # DEV / RESET DZIŚ
     # =============================
     if low in {"/reset_dzis", "/reset dzis", "/reset dziś", "reset dzis", "reset dziś"}:
