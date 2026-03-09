@@ -86,10 +86,10 @@ def _task_start_origin(t: Dict[str, Any], fallback_origin: Optional[str]) -> Opt
 
 
 def _task_travel_mode(t: Dict[str, Any], fallback_mode: Optional[str]) -> Optional[str]:
-    for k in ("travel_mode", "mode"):
-        v = t.get(k)
-        if isinstance(v, str) and v.strip():
-            return v.strip()
+    # Use only dedicated travel_mode; generic "mode" caused false values in plan output.
+    v = t.get("travel_mode")
+    if isinstance(v, str) and v.strip():
+        return v.strip()
     return fallback_mode
 
 
@@ -225,11 +225,12 @@ def build_day_plan(
         lines.append(headline)
 
         details: List[str] = []
-        if start_origin:
+        show_trip = bool(location or eta_min or task.get("travel_mode") or task.get("start_origin"))
+        if show_trip and start_origin:
             details.append(f"Start: {start_origin}")
         if eta_min:
             details.append(f"Dojazd: {eta_min} min")
-        if mode_display:
+        if show_trip and mode_display:
             details.append(f"Tryb: {mode_display}")
         if details:
             lines.append("      " + "  •  ".join(details))

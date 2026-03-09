@@ -287,6 +287,18 @@ def add_task(raw: str) -> Dict[str, Any]:
     if priority is None:
         priority = 2
 
+    checklist = None
+    if (not due_date) and (not due_time) and (not location) and (":" in title):
+        left, right = title.split(":", 1)
+        list_title = left.strip()
+        items = [x.strip().lstrip("-").strip() for x in right.split(",") if x.strip().lstrip("-").strip()]
+        if list_title and len(items) >= 2:
+            title = list_title
+            checklist = {
+                "title": list_title,
+                "items": [{"text": item, "done": False} for item in items],
+            }
+
     db = load_tasks_db()
     tasks = db["tasks"]
     task_id = _next_id(tasks)
@@ -326,6 +338,7 @@ def add_task(raw: str) -> Dict[str, Any]:
         "reminder_at": None,
         "reminder_enabled": False,
         "travel_mode": travel,  # None if not set
+        "checklist": checklist,
     }
     tasks.append(task)
     save_tasks_db(db)

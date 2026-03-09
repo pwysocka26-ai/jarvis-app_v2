@@ -34,6 +34,167 @@ PRIORITY_EMOJI = {
 }
 
 
+WEEKDAY_MAP = {
+    "poniedziałek": 0, "poniedzialek": 0,
+    "wtorek": 1,
+    "środa": 2, "sroda": 2, "środę": 2, "srodę": 2,
+    "czwartek": 3,
+    "piątek": 4, "piatek": 4, "piątku": 4, "piatku": 4,
+    "sobota": 5, "sobotę": 5, "sobote": 5,
+    "niedziela": 6, "niedzielę": 6, "niedziele": 6,
+}
+
+
+def _normalize_hhmm_token(tok: str) -> Optional[str]:
+    s = (tok or '').strip()
+    m = re.match(r'^(\d{1,2})(?::(\d{2}))?$', s)
+    if not m:
+        return None
+    hh = int(m.group(1))
+    mm = int(m.group(2) or '00')
+    if not (0 <= hh <= 23 and 0 <= mm <= 59):
+        return None
+    return f"{hh:02d}:{mm:02d}"
+
+
+def _next_weekday_date(name: str) -> Optional[date]:
+    wd = WEEKDAY_MAP.get((name or '').strip().lower())
+    if wd is None:
+        return None
+    today = date.today()
+    delta = (wd - today.weekday()) % 7
+    if delta == 0:
+        delta = 7
+    return today + timedelta(days=delta)
+
+
+def _split_title_and_location(rest: str) -> Tuple[str, Optional[str]]:
+    s = (rest or '').strip().strip(',')
+    if not s:
+        return '', None
+    if ',' in s:
+        title, loc = s.split(',', 1)
+        return title.strip(), loc.strip() or None
+    return s, None
+
+
+def _parse_checklist_items(items_raw: str) -> List[str]:
+    out: List[str] = []
+    for part in re.split(r',|;|\n', items_raw or ''):
+        item = str(part).strip().lstrip('-').strip()
+        if item:
+            out.append(item)
+    return out
+
+
+def _build_add_message(title: str, due_date: date, due_time: str, location: Optional[str] = None) -> str:
+    base = f"dodaj: {due_date.isoformat()} {due_time} {title.strip()}"
+    if location:
+        base += f", {location.strip()}"
+    return base
+
+
+def _create_task_from_nlp(title: str, due_date: date, due_time: str, location: Optional[str] = None, checklist: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    synthetic = _build_add_message(title=title, due_date=due_date, due_time=due_time, location=location)
+    out = tasks_mod.add_task(synthetic)
+    task = out.get('task') if isinstance(out, dict) else None
+    if isinstance(task, dict) and checklist and hasattr(tasks_mod, 'update_task'):
+        try:
+            tasks_mod.update_task(int(task.get('id')), checklist=checklist)
+            task = tasks_mod.get_task(int(task.get('id'))) or task
+            out['task'] = task
+        except Exception:
+            pass
+    return out
+
+
+def _maybe_handle_stable_nlp(message: str) -> Optional[Dict[str, Any]]:
+    msg = (message or '').strip()
+    low = msg.lower()
+
+    # Relative time: 'za 30 minut telefon', 'za godzinę telefon', 'za 2h telefon'
+    m_rel = re.match(r'^za\s+(?:(\d+)\s*(?:min|minut(?:y)?|m)|(?:1\s*)?(godzin(?:ę|e|y|a)?|h)|(?:(\d+)\s*h))\s+(.+)$', low, flags=re.I)
+    if m_rel:
+        mins = None
+        if m_rel.group(1):
+            mins = int(m_rel.group(1))
+        elif m_rel.group(2):
+            mins = 60
+        elif m_rel.group(3):
+            mins = int(m_rel.group(3)) * 60
+        title_part = msg[m_rel.start(4):].strip()
+        if mins and title_part:
+            due_dt = datetime.now() + timedelta(minutes=mins)
+            out = _create_task_from_nlp(title=title_part, due_date=due_dt.date(), due_time=due_dt.strftime('%H:%M'))
+            return _as_reply('add_task', _reply_from_any(out, 'OK'))
+
+    # Checklist task with time / place: 'zrób zakupy o 15:00 w Biedronce przy Narbutta: mleko, chleb'
+    if ':' in msg:
+        head, items_raw = msg.rsplit(':', 1)
+        items = _parse_checklist_items(items_raw)
+        if items:
+            head = head.strip()
+            title = None
+            due_date = date.today()
+            due_time = None
+            location = None
+            patterns = [
+                r'^(?P<title>.+?)\s+(?P<day>dziś|dzisiaj|jutro)\s+o\s+(?P<time>\d{1,2}(?::\d{2})?)\s+w\s+(?P<loc>.+)$',
+                r'^(?P<title>.+?)\s+(?P<day>dziś|dzisiaj|jutro)\s+(?P<time>\d{1,2}(?::\d{2})?)\s+w\s+(?P<loc>.+)$',
+                r'^(?P<title>.+?)\s+o\s+(?P<time>\d{1,2}(?::\d{2})?)\s+w\s+(?P<loc>.+)$',
+                r'^(?P<title>.+?)\s+w\s+(?P<loc>.+?)\s+o\s+(?P<time>\d{1,2}(?::\d{2})?)$',
+                r'^(?P<title>.+?)\s+(?P<day>dziś|dzisiaj|jutro)\s+o\s+(?P<time>\d{1,2}(?::\d{2})?)$',
+                r'^(?P<title>.+?)\s+o\s+(?P<time>\d{1,2}(?::\d{2})?)$',
+            ]
+            for pat in patterns:
+                m = re.match(pat, head, flags=re.I)
+                if not m:
+                    continue
+                title = m.group('title').strip()
+                if m.groupdict().get('day'):
+                    day = m.group('day').lower()
+                    due_date = date.today() + timedelta(days=1) if day == 'jutro' else date.today()
+                due_time = _normalize_hhmm_token(m.group('time'))
+                location = (m.groupdict().get('loc') or '').strip() or None
+                break
+            if title and due_time:
+                checklist = {'title': 'Lista', 'items': [{'text': it, 'done': False} for it in items]}
+                out = _create_task_from_nlp(title=title, due_date=due_date, due_time=due_time, location=location, checklist=checklist)
+                return _as_reply('add_task', _reply_from_any(out, 'OK'))
+
+    # 'jutro 9 dentysta' / 'dziś 18:30 dentysta, adres'
+    m_prefix = re.match(r'^(?P<day>dziś|dzisiaj|jutro)\s+(?P<time>\d{1,2}(?::\d{2})?)\s+(?P<rest>.+)$', msg, flags=re.I)
+    if m_prefix:
+        due_date = date.today() + timedelta(days=1) if m_prefix.group('day').lower() == 'jutro' else date.today()
+        due_time = _normalize_hhmm_token(m_prefix.group('time'))
+        title, location = _split_title_and_location(m_prefix.group('rest'))
+        if title and due_time:
+            out = _create_task_from_nlp(title=title, due_date=due_date, due_time=due_time, location=location)
+            return _as_reply('add_task', _reply_from_any(out, 'OK'))
+
+    # 'dentysta dziś 18:30'
+    m_suffix = re.match(r'^(?P<rest>.+?)\s+(?P<day>dziś|dzisiaj|jutro)\s+(?P<time>\d{1,2}(?::\d{2})?)$', msg, flags=re.I)
+    if m_suffix:
+        due_date = date.today() + timedelta(days=1) if m_suffix.group('day').lower() == 'jutro' else date.today()
+        due_time = _normalize_hhmm_token(m_suffix.group('time'))
+        title, location = _split_title_and_location(m_suffix.group('rest'))
+        if title and due_time:
+            out = _create_task_from_nlp(title=title, due_date=due_date, due_time=due_time, location=location)
+            return _as_reply('add_task', _reply_from_any(out, 'OK'))
+
+    # 'w środę 14 demo'
+    m_weekday = re.match(r'^w\s+(?P<weekday>poniedziałek|poniedzialek|wtorek|środę|srodę|środa|sroda|czwartek|piątek|piatek|sobotę|sobote|sobota|niedzielę|niedziele|niedziela)\s+(?P<time>\d{1,2}(?::\d{2})?)\s+(?P<rest>.+)$', msg, flags=re.I)
+    if m_weekday:
+        due_date = _next_weekday_date(m_weekday.group('weekday'))
+        due_time = _normalize_hhmm_token(m_weekday.group('time'))
+        title, location = _split_title_and_location(m_weekday.group('rest'))
+        if due_date and due_time and title:
+            out = _create_task_from_nlp(title=title, due_date=due_date, due_time=due_time, location=location)
+            return _as_reply('add_task', _reply_from_any(out, 'OK'))
+
+    return None
+
+
 def _task_time_str(t: Dict[str, Any]) -> str:
     """Return HH:MM if task has a concrete due time."""
     v = t.get("time")
@@ -294,6 +455,11 @@ def _fmt_time(hh: int, mm: int = 0) -> str:
 
 
 def _build_nlp_add_command(message: str) -> Optional[str]:
+    """Translate short natural Polish task phrases into stable `dodaj:` commands.
+
+    v11.1 fix: allow phrases starting with today words (e.g. `dziś 18:30 dentysta, adres`)
+    and keep the full tail, including address text after commas.
+    """
     raw = (message or "").strip()
     if not raw:
         return None
@@ -303,11 +469,14 @@ def _build_nlp_add_command(message: str) -> Optional[str]:
         "/", "dodaj", "lista", "usun", "usuń", "priorytet", "sort", "ustaw",
         "tu jestem", "start:", "rano", "diag", "help", "pamiec", "pamięć",
         "pokaz", "pokaż", "co pamietasz", "co pamiętasz", "zapamietaj",
-        "zapamiętaj", "zapomnij", "gdzie ", "plan dnia", "co dziś", "co dzis",
-        "dzisiaj", "dziś", "pomys", "notatk", "reminders", "inbox", "eta",
+        "zapamiętaj", "zapomnij", "gdzie ", "plan dnia",
+        "pomys", "notatk", "reminders", "inbox", "eta",
         "czy zdaz", "czy zdąż", "przenies", "przenieś", "edytuj", "wyczysc", "wyczyść",
+        "ułóż dzień", "uloz dzien", "przeplanuj", "ile mam wolnego czasu", "reset",
     )
-    if low in YES or low in NO or low.startswith(blocked_prefixes):
+    # Do not block natural task phrases that start with "dziś/dzisiaj".
+    # Exact commands like "dziś" are still handled later by the router.
+    if low in YES or low in NO or low.startswith(blocked_prefixes) or low in {"dziś", "dzis", "dzisiaj", "co dziś", "co dzis"}:
         return None
 
     m = re.match(r"^za\s+(\d+)\s*(h|godz|godzin(?:e|ę|y)?|m|min|mins|minut(?:e|ę|y)?)\s+(.+)$", low, flags=re.I)
@@ -371,6 +540,16 @@ def _build_nlp_add_command(message: str) -> Optional[str]:
     return None
 
 
+def _priority_emoji(priority: Any, explicit: bool = True) -> str:
+    try:
+        pr = int(priority)
+    except Exception:
+        return ""
+    if pr == 2 and not explicit:
+        return ""
+    return PRIORITY_EMOJI.get(pr, f"p{pr} ") if pr in PRIORITY_EMOJI else (f"p{pr} " if pr else "")
+
+
 
 def _normalize_travel_mode(s: str) -> Optional[str]:
     t = (s or "").strip().lower()
@@ -408,6 +587,27 @@ def _google_mode_from_task(travel_mode: str) -> Optional[str]:
 
 def route_intent(message: str, persona: str = "b2c", mode: Optional[str] = None, **kwargs) -> Dict[str, Any]:
     low = (message or "").strip().lower()
+
+
+    if low in {"wyczyść wszystko", "wyczysc wszystko", "reset wszystko", "reset all", "/reset_all"}:
+        try:
+            from app.b2c import inbox as inbox_mod
+            for path in [tasks_mod.TASKS_FILE, inbox_mod.INBOX_FILE, inbox_mod.IDEAS_FILE, inbox_mod.NOTES_FILE, inbox_mod.REMINDERS_FILE]:
+                try:
+                    path.parent.mkdir(parents=True, exist_ok=True)
+                    path.write_text("[]", encoding="utf-8")
+                except Exception:
+                    pass
+            for fn_name in ("clear_pending_travel", "clear_pending_reminder", "clear_pending_checklist", "clear_pending_clear"):
+                try:
+                    fn = getattr(tasks_mod, fn_name, None)
+                    if fn:
+                        fn()
+                except Exception:
+                    pass
+            return _as_reply("reset_all", "🧹 Wyczyściłam dane testowe Jarvisa.\nTasks: 0\nIdeas: 0\nNotes: 0\nReminders: 0\nInbox: 0\n\n(Zachowałam ustawienia: dom / praca / tryb).")
+        except Exception:
+            return _as_reply("reset_all", "Nie udało się wyczyścić wszystkich danych.")
 
     # =============================
     # INBOX v1
@@ -449,6 +649,64 @@ def route_intent(message: str, persona: str = "b2c", mode: Optional[str] = None,
         if isinstance(out, dict) and out.get("task"):
             inbox_mod.delete_inbox_by_live_number(n)
         return _as_reply("inbox_to_task", _reply_from_any(out, default="OK"))
+
+    # ===== INBOX v7 BUCKETS =====
+    if low in {"pomysły", "pomysly", "pomysł", "pomysl"}:
+        from app.b2c import inbox as inbox_mod
+        out = inbox_mod.list_bucket(inbox_mod.IDEAS_FILE, "Pomysły")
+        return _as_reply("ideas_list", out.get("reply", "Pomysły są puste."))
+
+    if low in {"notatki", "notatka"}:
+        from app.b2c import inbox as inbox_mod
+        out = inbox_mod.list_bucket(inbox_mod.NOTES_FILE, "Notatki")
+        return _as_reply("notes_list", out.get("reply", "Notatki są puste."))
+
+    if low in {"reminders", "reminder"}:
+        from app.b2c import inbox as inbox_mod
+        out = inbox_mod.list_bucket(inbox_mod.REMINDERS_FILE, "Reminders")
+        return _as_reply("reminders_list", out.get("reply", "Reminders są puste."))
+
+    m_bucket_clear = re.match(r"^(?:usu[ńn]\s+wszystko\s+z\s+|wyczy[śs]?[ćc]?\s+)(pomys(?:ł|l)(?:y|ów|ow)?|notatk(?:i|ę|e|ek)|reminders?)\s*$", message, flags=re.I)
+    if m_bucket_clear:
+        from app.b2c import inbox as inbox_mod
+        kind_raw = m_bucket_clear.group(1).lower()
+        kind = "idea" if kind_raw.startswith("pomys") else "note" if kind_raw.startswith("notatk") else "reminder"
+        out = inbox_mod.clear_bucket(kind)
+        return _as_reply("bucket_clear", out.get("reply", "OK"))
+
+    m_bucket_move_all = re.match(r"^przenie[śs]\s+wszystko\s+z\s+(pomys(?:ł|l)ów|notatek|reminders?)\s+do\s+zada[ńn](?:\s+(.+))?$", message, flags=re.I)
+    if m_bucket_move_all:
+        from app.b2c import inbox as inbox_mod
+        kind_raw = m_bucket_move_all.group(1).lower()
+        kind = "idea" if kind_raw.startswith("pomys") else "note" if kind_raw.startswith("notat") else "reminder"
+        suffix = (m_bucket_move_all.group(2) or "").strip()
+        out = inbox_mod.move_all_bucket_to_task(kind, suffix)
+        return _as_reply("bucket_to_task_all", out.get("reply", "OK"))
+
+    m_bucket_delete = re.match(r"^usu[ńn]\s+(pomys[łl]|notatk[ęe]|reminder)\s+(\d+)\s*$", message, flags=re.I)
+    if m_bucket_delete:
+        from app.b2c import inbox as inbox_mod
+        kind_raw = m_bucket_delete.group(1).lower()
+        kind = "idea" if kind_raw.startswith("pomys") else "note" if kind_raw.startswith("notatk") else "reminder"
+        out = inbox_mod.delete_bucket_item(kind, int(m_bucket_delete.group(2)))
+        return _as_reply("bucket_delete", out.get("reply", "OK"))
+
+    m_bucket_edit = re.match(r"^edytuj\s+(pomys[łl]|notatk[ęe]|reminder)\s+(\d+)\s+(.+)$", message, flags=re.I)
+    if m_bucket_edit:
+        from app.b2c import inbox as inbox_mod
+        kind_raw = m_bucket_edit.group(1).lower()
+        kind = "idea" if kind_raw.startswith("pomys") else "note" if kind_raw.startswith("notatk") else "reminder"
+        out = inbox_mod.edit_bucket_item(kind, int(m_bucket_edit.group(2)), m_bucket_edit.group(3).strip())
+        return _as_reply("bucket_edit", out.get("reply", "OK"))
+
+    m_bucket_move = re.match(r"^przenie[śs]\s+(pomys[łl]|notatk[ęe]|reminder)\s+(\d+)\s+do\s+zadania(?:\s+(.+))?$", message, flags=re.I)
+    if m_bucket_move:
+        from app.b2c import inbox as inbox_mod
+        kind_raw = m_bucket_move.group(1).lower()
+        kind = "idea" if kind_raw.startswith("pomys") else "note" if kind_raw.startswith("notatk") else "reminder"
+        suffix = (m_bucket_move.group(3) or "").strip()
+        out = inbox_mod.move_bucket_item_to_task(kind, int(m_bucket_move.group(2)), suffix)
+        return _as_reply("bucket_to_task", out.get("reply", "OK"))
 
 
     def _is_command_like(txt: str) -> bool:
@@ -501,6 +759,43 @@ def route_intent(message: str, persona: str = "b2c", mode: Optional[str] = None,
         addr = message.split(":", 1)[1].strip()
         ok = _set_place("origin_current", addr)
         return _as_reply("set_origin_current", "✅ OK, zapamiętałem gdzie jesteś." if ok else "Nie udało się zapisać lokalizacji.")
+
+    # =============================
+    # SMART PLAN / V10
+    # =============================
+    if low in {"ułóż dzień", "uloz dzien", "ułoz dzien", "ułóż dzien"}:
+        try:
+            from app.b2c.smart_plan import build_smart_day_plan
+            today_iso = date.today().isoformat()
+            tasks_today = tasks_mod.list_tasks_for_date(today_iso) or []
+            origin_addr = _get_origin_address()
+            transport_default = _get_place("travel_mode_default") or "samochod"
+            plan = build_smart_day_plan(tasks_today, today_iso, origin_addr, transport_default, buffer_min=TRAVEL_BUFFER_MIN)
+            return _as_reply("smart_day_plan", plan)
+        except Exception:
+            return _as_reply("smart_day_plan", "Nie mogę teraz ułożyć dnia.")
+
+    if low in {"przeplanuj dzień", "przeplanuj dzien"}:
+        try:
+            from app.b2c.smart_plan import build_replanned_day_plan
+            today_iso = date.today().isoformat()
+            tasks_today = tasks_mod.list_tasks_for_date(today_iso) or []
+            origin_addr = _get_origin_address()
+            transport_default = _get_place("travel_mode_default") or "samochod"
+            plan = build_replanned_day_plan(tasks_today, today_iso, origin_addr, transport_default, buffer_min=TRAVEL_BUFFER_MIN)
+            return _as_reply("smart_day_plan", plan)
+        except Exception:
+            return _as_reply("smart_day_plan", "Nie mogę teraz przeplanować dnia.")
+
+    if low in {"ile mam wolnego czasu", "wolny czas", "ile wolnego czasu"}:
+        try:
+            from app.b2c.smart_plan import summarize_free_time
+            today_iso = date.today().isoformat()
+            tasks_today = tasks_mod.list_tasks_for_date(today_iso) or []
+            summary = summarize_free_time(tasks_today, today_iso)
+            return _as_reply("free_time_summary", summary)
+        except Exception:
+            return _as_reply("free_time_summary", "Nie mogę teraz policzyć wolnego czasu.")
 
     # =============================
     # PLAN DNIA
@@ -1136,6 +1431,13 @@ def route_intent(message: str, persona: str = "b2c", mode: Optional[str] = None,
     if synthetic_add:
         message = synthetic_add
         low = message.strip().lower()
+
+    # =============================
+    # STABLE NLP (czas względny / naturalny / checklist task)
+    # =============================
+    nlp_out = _maybe_handle_stable_nlp(message)
+    if nlp_out is not None:
+        return nlp_out
 
     # DODAJ (spójny numer LIVE z listą)
     # =============================
