@@ -87,6 +87,26 @@ def _parse_checklist_items(items_raw: str) -> List[str]:
     return out
 
 
+def _looks_like_new_task_request(message: str) -> bool:
+    msg = (message or '').strip()
+    low = msg.lower()
+    if not msg:
+        return False
+    if low.startswith('dodaj:') or low.startswith('add:'):
+        return True
+    if re.match(r'^za\s+(?:(?:\d+)\s*(?:min|minut(?:y)?|m|h)|(?:1\s*)?godzin(?:ę|e|y|a)?)\s+.+$', low, flags=re.I):
+        return True
+    if re.match(r'^(?:dziś|dzisiaj|jutro)\s+\d{1,2}(?::\d{2})?\s+.+$', msg, flags=re.I):
+        return True
+    if re.match(r'^.+\s+(?:dziś|dzisiaj|jutro)\s+\d{1,2}(?::\d{2})?(?:\s*,\s*.+)?$', msg, flags=re.I):
+        return True
+    if re.match(r'^w\s+(?:poniedzia[łl]ek|wtorek|[śs]rod[ęea]|czwartek|pi[ąa]tek|sobot[ęea]|niedziel[ęea])\s+\d{1,2}(?::\d{2})?\s+.+$', msg, flags=re.I):
+        return True
+    if ':' in msg and len(_parse_checklist_items(msg.rsplit(':', 1)[1])) >= 2:
+        return True
+    return False
+
+
 def _build_add_message(title: str, due_date: date, due_time: str, location: Optional[str] = None) -> str:
     base = f"dodaj: {due_date.isoformat()} {due_time} {title.strip()}"
     if location:
@@ -158,7 +178,10 @@ def _maybe_handle_stable_nlp(message: str) -> Optional[Dict[str, Any]]:
                 location = (m.groupdict().get('loc') or '').strip() or None
                 break
             if title and due_time:
-                checklist = {'title': 'Lista', 'items': [{'text': it, 'done': False} for it in items]}
+                title = re.sub(r'^zrobi[ćc]\s+', '', title, flags=re.I).strip()
+                if re.match(r'^(zakupy|zrob\s+zakupy)$', title, flags=re.I):
+                    title = 'zakupy'
+                checklist = {'title': title.capitalize() if title else 'Lista', 'items': [{'text': it, 'done': False} for it in items]}
                 out = _create_task_from_nlp(title=title, due_date=due_date, due_time=due_time, location=location, checklist=checklist)
                 return _as_reply('add_task', _reply_from_any(out, 'OK'))
 
@@ -585,6 +608,151 @@ def _google_mode_from_task(travel_mode: str) -> Optional[str]:
     return None
 
 
+def _display_mode_label(travel_mode: str) -> str:
+    tm = _normalize_travel_mode(travel_mode) or "samochod"
+    return {"samochod": "samochodem", "autobus": "komunikacją", "rower": "rowerem", "pieszo": "pieszo"}.get(tm, "samochodem")
+
+
+def _task_title(task: Dict[str, Any]) -> str:
+    return _clean_title_for_display(str(task.get("title") or task.get("text") or "(bez tytułu)")).strip()
+
+
+def _task_location(task: Dict[str, Any]) -> str:
+    return str(task.get("location") or task.get("place") or "").strip()
+
+
+def _task_priority(task: Dict[str, Any]) -> int:
+    try:
+        return int(task.get("priority") or 2)
+    except Exception:
+        return 2
+
+
+def _task_due_minutes(task: Dict[str, Any]) -> Optional[int]:
+    return _parse_time_to_minutes(_task_time_str(task))
+
+
+def _brain_eta_for_task(task: Dict[str, Any], origin: Optional[str]) -> Tuple[Optional[int], Optional[str]]:
+    location = _task_location(task)
+    if not (origin and location):
+        return None, None
+    raw_mode = str(task.get("travel_mode") or _get_place("travel_mode_default") or "samochod")
+    gm = _google_mode_from_task(raw_mode)
+    minutes = None
+    if gm:
+        try:
+            minutes = get_eta_minutes(origin=origin, destination=location, mode=gm)
+        except Exception:
+            minutes = None
+    if not (isinstance(minutes, int) and minutes > 0):
+        minutes = _mvp_eta_minutes(raw_mode)
+    return int(minutes), _display_mode_label(raw_mode)
+
+
+def _brain_rank_key(task: Dict[str, Any]) -> Tuple[int, int, int, str]:
+    pr = _task_priority(task)
+    due_min = _task_due_minutes(task)
+    has_time = 0 if due_min is not None else 1
+    return (pr, has_time, due_min if due_min is not None else 9999, str(task.get("created_at") or ""))
+
+
+def _brain_today_tasks() -> List[Dict[str, Any]]:
+    tasks = _sort_for_list(tasks_mod.list_tasks_for_date(date.today()) or [])
+    return [t for t in tasks if isinstance(t, dict) and not bool(t.get("done"))]
+
+
+def _brain_choose_next(tasks: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    if not tasks:
+        return None
+    now = datetime.now()
+    now_min = now.hour * 60 + now.minute
+    overdue_timed = [t for t in tasks if _task_due_minutes(t) is not None and (_task_due_minutes(t) or 0) < now_min]
+    if overdue_timed:
+        return sorted(overdue_timed, key=lambda t: ((_task_due_minutes(t) or 0), _task_priority(t)))[0]
+    upcoming_timed = [t for t in tasks if _task_due_minutes(t) is not None and (_task_due_minutes(t) or 0) >= now_min]
+    if upcoming_timed:
+        return sorted(upcoming_timed, key=lambda t: ((_task_due_minutes(t) or 9999), _task_priority(t)))[0]
+    return sorted(tasks, key=_brain_rank_key)[0]
+
+
+def _brain_now_reply(tasks: List[Dict[str, Any]]) -> str:
+    if not tasks:
+        return "Na dziś nie masz żadnych otwartych zadań. Możesz dodać coś nowego albo zajrzeć do pomysłów."
+    chosen = _brain_choose_next(tasks)
+    if not chosen:
+        return "Na dziś nie widzę nic pilnego."
+    title = _task_title(chosen)
+    location = _task_location(chosen)
+    due_min = _task_due_minutes(chosen)
+    pr = _task_priority(chosen)
+    pr_txt = f"p{pr}" if pr else "p2"
+    now = datetime.now()
+    now_min = now.hour * 60 + now.minute
+    origin = _get_origin_address()
+    if due_min is not None:
+        when = f"{due_min // 60:02d}:{due_min % 60:02d}"
+        if location and origin:
+            eta_min, mode_label = _brain_eta_for_task(chosen, origin)
+            if eta_min is not None:
+                leave_min = due_min - eta_min - TRAVEL_BUFFER_MIN
+                if now_min >= leave_min:
+                    return (
+                        f"Teraz zrób to: **wyjdź na {title}**.\n"
+                        f"Godzina: **{when}**\n"
+                        f"Trasa: {origin} → {location}\n"
+                        f"ETA: około **{eta_min} min** ({mode_label})\n"
+                        f"Bufor: {TRAVEL_BUFFER_MIN} min."
+                    )
+                mins_left = leave_min - now_min
+                return (
+                    f"Teraz najlepiej przygotuj się do: **{title}**.\n"
+                    f"Start: **{when}**\n"
+                    f"Wyjście za około **{mins_left} min**.\n"
+                    f"Trasa: {origin} → {location}\n"
+                    f"ETA: około **{eta_min} min** ({mode_label})."
+                )
+        if due_min - now_min <= 30:
+            return f"Teraz najlepiej zajmij się: **{title}**. Zaczyna się o **{when}**."
+        return f"Teraz najbliższe zadanie to: **{title}** o **{when}** ({pr_txt})."
+    top_timed = [t for t in tasks if _task_due_minutes(t) is not None]
+    nearest_timed_gap = ((_task_due_minutes(top_timed[0]) or 9999) - now_min) if top_timed else 9999
+    if pr == 1 and nearest_timed_gap > 45:
+        return f"Teraz zrób: **{title}**. To Twoje najwyższe priorytetowo zadanie na dziś ({pr_txt})."
+    return f"Teraz dobry moment na: **{title}** ({pr_txt})."
+
+
+def _brain_next_reply(tasks: List[Dict[str, Any]]) -> str:
+    chosen = _brain_choose_next(tasks)
+    if not chosen:
+        return "Na dziś nie masz już żadnych zadań."
+    title = _task_title(chosen)
+    location = _task_location(chosen)
+    due_min = _task_due_minutes(chosen)
+    pr = _task_priority(chosen)
+    pr_txt = f"p{pr}" if pr else "p2"
+    if due_min is not None:
+        when = f"{due_min // 60:02d}:{due_min % 60:02d}"
+        tail = f" — {location}" if location else ""
+        return f"Następne zadanie: **{when} {title}**{tail} ({pr_txt})."
+    return f"Następne zadanie bez godziny: **{title}** ({pr_txt})."
+
+
+def _brain_top_reply(tasks: List[Dict[str, Any]]) -> str:
+    if not tasks:
+        return "Na dziś nie masz jeszcze żadnych zadań."
+    ranked = sorted(tasks, key=_brain_rank_key)[:3]
+    lines = ["**Najważniejsze dziś:**"]
+    for idx, task in enumerate(ranked, start=1):
+        title = _task_title(task)
+        pr = _task_priority(task)
+        due_min = _task_due_minutes(task)
+        when = f"{due_min // 60:02d}:{due_min % 60:02d} — " if due_min is not None else ""
+        loc = _task_location(task)
+        tail = f" — {loc}" if loc else ""
+        lines.append(f"{idx}. {when}{title}{tail} (p{pr})")
+    return "\n".join(lines)
+
+
 def route_intent(message: str, persona: str = "b2c", mode: Optional[str] = None, **kwargs) -> Dict[str, Any]:
     low = (message or "").strip().lower()
 
@@ -608,6 +776,23 @@ def route_intent(message: str, persona: str = "b2c", mode: Optional[str] = None,
             return _as_reply("reset_all", "🧹 Wyczyściłam dane testowe Jarvisa.\nTasks: 0\nIdeas: 0\nNotes: 0\nReminders: 0\nInbox: 0\n\n(Zachowałam ustawienia: dom / praca / tryb).")
         except Exception:
             return _as_reply("reset_all", "Nie udało się wyczyścić wszystkich danych.")
+
+    if low in {
+        "co powinienem zrobić teraz", "co powinienem zrobic teraz",
+        "co mam zrobić teraz", "co mam zrobic teraz",
+        "co teraz", "co robić teraz", "co robic teraz"
+    }:
+        return _as_reply("brain_now", _brain_now_reply(_brain_today_tasks()))
+
+    if low in {"następne zadanie", "nastepne zadanie", "co dalej", "następny krok", "nastepny krok"}:
+        return _as_reply("brain_next", _brain_next_reply(_brain_today_tasks()))
+
+    if low in {
+        "co jest dziś najważniejsze", "co jest dzis najwazniejsze",
+        "najważniejsze dziś", "najwazniejsze dzis",
+        "priorytety dnia"
+    }:
+        return _as_reply("brain_top", _brain_top_reply(_brain_today_tasks()))
 
     # =============================
     # INBOX v1
@@ -1208,13 +1393,14 @@ def route_intent(message: str, persona: str = "b2c", mode: Optional[str] = None,
     pending_t = tasks_mod.get_pending_travel()
     if pending_t:
         created_from = str(pending_t.get("created_from") or "")
+        skip_pending_for_new_command = _looks_like_new_task_request(message)
         try:
             pending_task_id = int(pending_t.get("task_id"))
         except Exception:
             pending_task_id = None
     
         # Step 1: ask/handle START (always after adding timed+location task)
-        if created_from == "add_start" and pending_task_id is not None:
+        if created_from == "add_start" and pending_task_id is not None and not skip_pending_for_new_command:
             if _is_command_like(message) or not (message or '').strip():
                 return _as_reply("set_origin_mode", "Skąd ruszasz? Napisz: `dom` / `praca` / `tu` albo podaj adres startu.")
     
@@ -1281,7 +1467,7 @@ def route_intent(message: str, persona: str = "b2c", mode: Optional[str] = None,
             return _as_reply("set_travel_mode", "✅ OK. Jak jedziesz? Napisz: `samochodem` / `komunikacją` / `rowerem` / `pieszo`.")
     
         # Step 2: handle travel mode
-        if created_from == "add_mode" and pending_task_id is not None:
+        if created_from == "add_mode" and pending_task_id is not None and not skip_pending_for_new_command:
             if _is_command_like(message) or not (message or "").strip():
                 return _as_reply("set_travel_mode", "✅ OK. Jak jedziesz? Napisz: `samochodem` / `komunikacją` / `rowerem` / `pieszo`.")
             out = tasks_mod.apply_travel_mode_to_pending(message)
@@ -1326,11 +1512,12 @@ def route_intent(message: str, persona: str = "b2c", mode: Optional[str] = None,
                 return _as_reply("set_travel_mode", "Jak jedziesz? Napisz: `samochodem` / `komunikacją` / `rowerem` / `pieszo`.")
     
         # fallback (older flows)
-        out = tasks_mod.apply_travel_mode_to_pending(message)
-        if out is not None:
-            return _as_reply("set_travel_mode", _reply_from_any(out, default="OK"))
-        if not _is_command_like(message):
-            return _as_reply("set_travel_mode", "Jak jedziesz? Napisz: `samochodem` / `komunikacją` / `rowerem` / `pieszo`.")
+        if not skip_pending_for_new_command:
+            out = tasks_mod.apply_travel_mode_to_pending(message)
+            if out is not None:
+                return _as_reply("set_travel_mode", _reply_from_any(out, default="OK"))
+            if not _is_command_like(message):
+                return _as_reply("set_travel_mode", "Jak jedziesz? Napisz: `samochodem` / `komunikacją` / `rowerem` / `pieszo`.")
 
 
     # ===== INBOX v4 TASK CONVERSION =====

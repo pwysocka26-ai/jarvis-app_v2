@@ -124,6 +124,10 @@ def _checklist_lines(t: Dict[str, Any], max_items: int = 10) -> List[str]:
     if not isinstance(items, list) or not items:
         return []
     lines: List[str] = []
+    cl_title = str(cl.get("title") or "").strip()
+    task_title = _task_title(t).strip().lower()
+    if cl_title and cl_title.lower() != task_title:
+        lines.append(f"      Lista: {cl_title}")
     shown = 0
     for it in items:
         if shown >= max_items:

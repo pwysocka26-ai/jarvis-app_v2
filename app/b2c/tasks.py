@@ -293,9 +293,11 @@ def add_task(raw: str) -> Dict[str, Any]:
         list_title = left.strip()
         items = [x.strip().lstrip("-").strip() for x in right.split(",") if x.strip().lstrip("-").strip()]
         if list_title and len(items) >= 2:
-            title = list_title
+            title = re.sub(r'^zrobi[ćc]\s+', '', list_title, flags=re.I).strip()
+            if re.match(r'^(zakupy|zrob\s+zakupy)$', title, flags=re.I):
+                title = 'zakupy'
             checklist = {
-                "title": list_title,
+                "title": title.capitalize() if title else 'Lista',
                 "items": [{"text": item, "done": False} for item in items],
             }
 
