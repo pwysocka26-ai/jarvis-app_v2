@@ -794,6 +794,34 @@ def route_intent(message: str, persona: str = "b2c", mode: Optional[str] = None,
     }:
         return _as_reply("brain_top", _brain_top_reply(_brain_today_tasks()))
 
+    if low in {"czy zdążę na wszystkie zadania", "czy zdaze na wszystkie zadania", "czy zdążę na wszystko", "czy zdaze na wszystko"}:
+        try:
+            from app.b2c.context_ai import assess_all_today_schedule
+            return _as_reply("context_all_fit", assess_all_today_schedule(tasks_mod, _get_origin_address(), _get_place("travel_mode_default") or "samochod", buffer_min=TRAVEL_BUFFER_MIN))
+        except Exception:
+            return _as_reply("context_all_fit", "Nie mogę teraz sprawdzić całego planu dnia.")
+
+    if low in {"co mogę zrobić w wolnym czasie", "co moge zrobic w wolnym czasie", "co w wolnym czasie", "wolny czas co robić", "wolny czas co robic"}:
+        try:
+            from app.b2c.context_ai import suggest_for_free_time
+            return _as_reply("context_free_time", suggest_for_free_time(tasks_mod))
+        except Exception:
+            return _as_reply("context_free_time", "Nie mogę teraz podpowiedzieć co zrobić w wolnym czasie.")
+
+    if low in {"przełóż mniej ważne zadania", "przeloz mniej wazne zadania", "przełóż mniej ważne", "przeloz mniej wazne"}:
+        try:
+            from app.b2c.context_ai import postpone_lower_priority_tasks
+            return _as_reply("context_postpone", postpone_lower_priority_tasks(tasks_mod))
+        except Exception:
+            return _as_reply("context_postpone", "Nie mogę teraz przełożyć mniej ważnych zadań.")
+
+    if low in {"zaplanuj mi dzień automatycznie", "zaplanuj mi dzien automatycznie", "ułóż mi dzień automatycznie", "uloz mi dzien automatycznie", "autoplan dnia"}:
+        try:
+            from app.b2c.context_ai import auto_plan_day
+            return _as_reply("context_autoplan", auto_plan_day(tasks_mod, _get_origin_address(), _get_place("travel_mode_default") or "samochod", buffer_min=TRAVEL_BUFFER_MIN))
+        except Exception:
+            return _as_reply("context_autoplan", "Nie mogę teraz automatycznie zaplanować dnia.")
+
     # =============================
     # INBOX v1
     # =============================
@@ -921,6 +949,14 @@ def route_intent(message: str, persona: str = "b2c", mode: Optional[str] = None,
             or t.startswith("zapomnij")
             or t.startswith("gdzie ")
             or t.startswith("plan dnia")
+            or t.startswith("co mogę zrobić w wolnym czasie")
+            or t.startswith("co moge zrobic w wolnym czasie")
+            or t.startswith("czy zdążę na wszystkie zadania")
+            or t.startswith("czy zdaze na wszystkie zadania")
+            or t.startswith("przełóż mniej ważne zadania")
+            or t.startswith("przeloz mniej wazne zadania")
+            or t.startswith("zaplanuj mi dzień automatycznie")
+            or t.startswith("zaplanuj mi dzien automatycznie")
             or t.startswith("co dziś")
             or t.startswith("co dzis")
             or t.startswith("dzisiaj")
