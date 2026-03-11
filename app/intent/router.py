@@ -822,6 +822,57 @@ def route_intent(message: str, persona: str = "b2c", mode: Optional[str] = None,
         except Exception:
             return _as_reply("context_autoplan", "Nie mogę teraz automatycznie zaplanować dnia.")
 
+    if low in {"zaplanuj cały mój dzień", "zaplanuj caly moj dzien", "zaplanuj cały dzień", "zaplanuj caly dzien"}:
+        try:
+            from app.b2c.context_ai import plan_whole_day
+            return _as_reply("context_plan_whole_day", plan_whole_day(tasks_mod, _get_origin_address(), _get_place("travel_mode_default") or "samochod", buffer_min=TRAVEL_BUFFER_MIN))
+        except Exception:
+            return _as_reply("context_plan_whole_day", "Nie mogę teraz zaplanować całego dnia.")
+
+    m_now_window = re.match(r'^co mog[eę]\s+zrobi[cć]\s+teraz\s+w\s+(\d{1,3})\s+min(?:ut(?:y)?)?$', low)
+    if m_now_window:
+        try:
+            from app.b2c.context_ai import suggest_now_with_limit
+            minutes = int(m_now_window.group(1))
+            return _as_reply("context_now_window", suggest_now_with_limit(tasks_mod, minutes))
+        except Exception:
+            return _as_reply("context_now_window", "Nie mogę teraz podpowiedzieć co zmieści się w tym oknie.")
+
+    if low in {"zoptymalizuj plan dnia", "optymalizuj plan dnia", "ulepsz plan dnia"}:
+        try:
+            from app.b2c.context_ai import optimize_day_plan
+            return _as_reply("context_optimize_day", optimize_day_plan(tasks_mod, _get_origin_address(), _get_place("travel_mode_default") or "samochod", buffer_min=TRAVEL_BUFFER_MIN))
+        except Exception:
+            return _as_reply("context_optimize_day", "Nie mogę teraz zoptymalizować planu dnia.")
+
+    if low in {"przygotuj mnie do następnego zadania", "przygotuj mnie do nastepnego zadania", "przygotuj do następnego zadania", "przygotuj do nastepnego zadania"}:
+        try:
+            from app.b2c.context_ai import prepare_for_next_task
+            return _as_reply("context_prepare_next", prepare_for_next_task(tasks_mod, _get_origin_address(), _get_place("travel_mode_default") or "samochod", buffer_min=TRAVEL_BUFFER_MIN))
+        except Exception:
+            return _as_reply("context_prepare_next", "Nie mogę teraz przygotować Cię do następnego zadania.")
+
+
+    if low in {"jaki jest mój następny krok", "jaki jest moj nastepny krok", "mój następny krok", "moj nastepny krok", "co dalej dziś", "co dalej dzis"}:
+        try:
+            from app.b2c.context_ai import daily_next_step
+            return _as_reply("daily_next_step", daily_next_step(tasks_mod, _get_origin_address(), _get_place("travel_mode_default") or "samochod", buffer_min=TRAVEL_BUFFER_MIN))
+        except Exception:
+            return _as_reply("daily_next_step", "Nie mogę teraz wskazać następnego kroku.")
+
+    if low in {"przygotuj mój dzień", "przygotuj moj dzien", "przygotuj dzien", "rozpocznij dzień", "rozpocznij dzien"}:
+        try:
+            from app.b2c.context_ai import prepare_my_day
+            return _as_reply("daily_prepare_day", prepare_my_day(tasks_mod, _get_origin_address(), _get_place("travel_mode_default") or "samochod", buffer_min=TRAVEL_BUFFER_MIN))
+        except Exception:
+            return _as_reply("daily_prepare_day", "Nie mogę teraz przygotować Twojego dnia.")
+
+    if low in {"co mogę zrobić w tym oknie czasu", "co moge zrobic w tym oknie czasu", "co mogę zrobić w tym oknie", "co moge zrobic w tym oknie", "co zmieści się w tym oknie", "co zmiesci sie w tym oknie"}:
+        try:
+            from app.b2c.context_ai import suggest_for_current_window
+            return _as_reply("daily_window", suggest_for_current_window(tasks_mod, _get_origin_address(), _get_place("travel_mode_default") or "samochod", buffer_min=TRAVEL_BUFFER_MIN))
+        except Exception:
+            return _as_reply("daily_window", "Nie mogę teraz ocenić tego okna czasu.")
     # =============================
     # INBOX v1
     # =============================
@@ -956,6 +1007,10 @@ def route_intent(message: str, persona: str = "b2c", mode: Optional[str] = None,
             or t.startswith("przełóż mniej ważne zadania")
             or t.startswith("przeloz mniej wazne zadania")
             or t.startswith("zaplanuj mi dzień automatycznie")
+            or t.startswith("zaplanuj cały mój dzień")
+            or t.startswith("co mogę zrobić teraz w")
+            or t.startswith("zoptymalizuj plan dnia")
+            or t.startswith("przygotuj mnie do następnego zadania")
             or t.startswith("zaplanuj mi dzien automatycznie")
             or t.startswith("co dziś")
             or t.startswith("co dzis")
