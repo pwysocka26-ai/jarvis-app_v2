@@ -119,7 +119,43 @@ def _eta_minutes(origin: Optional[str], destination: Optional[str], mode: Option
 
 
 def _today_tasks(tasks_mod) -> List[Dict[str, Any]]:
-    return tasks_mod.sort_for_list(tasks_mod.list_tasks_for_date(_today_iso()) or [], mode="time")
+    """Return today's tasks plus flexible tasks without a due date/time.
+
+    Context AI should treat undated tasks as candidates for today's free windows,
+    otherwise commands like 'co mogę zrobić w tym oknie czasu' ignore freshly
+    added tasks such as 'bez godziny ogarnąć maile'.
+    """
+    today_iso = _today_iso()
+    dated = tasks_mod.list_tasks_for_date(today_iso) or []
+    dated_ids = set()
+    out: List[Dict[str, Any]] = []
+    for t in dated:
+        out.append(t)
+        try:
+            dated_ids.add(int(t.get("id") or 0))
+        except Exception:
+            pass
+
+    # Add flexible tasks with no due_at as today's candidates.
+    try:
+        all_tasks = tasks_mod.load_tasks()
+    except Exception:
+        all_tasks = []
+    for t in all_tasks or []:
+        if not isinstance(t, dict) or bool(t.get("done")):
+            continue
+        due = str(t.get("due_at") or "").strip()
+        if due:
+            continue
+        try:
+            tid = int(t.get("id") or 0)
+        except Exception:
+            tid = 0
+        if tid and tid in dated_ids:
+            continue
+        out.append(t)
+
+    return tasks_mod.sort_for_list(out, mode="time")
 
 
 def _tomorrow_tasks(tasks_mod) -> List[Dict[str, Any]]:
@@ -568,47 +604,41 @@ def prepare_my_day(tasks_mod, origin: Optional[str], default_mode: Optional[str]
 
 def suggest_for_current_window(tasks_mod, origin: Optional[str], default_mode: Optional[str], buffer_min: int = DEFAULT_BUFFER_MIN) -> str:
     tasks = _today_tasks(tasks_mod)
-    timed = _timed_tasks(tasks)
     untimed = sorted(_untimed_tasks(tasks), key=lambda t: (_priority(t), str(t.get("created_at") or "")))
+    win = _current_window(tasks_mod)
+    if not win:
+        timed = _timed_tasks(tasks)
+        free = _free_windows(timed) if timed else [(DAY_START_MIN, DAY_END_MIN)]
+        if free:
+            biggest = max(free, key=lambda w: w[1] - w[0])
+            gap = biggest[1] - biggest[0]
+            lines = [
+                f"Nie ma już aktywnego okna od teraz, ale największe dzisiejsze okno to **{_fmt_hhmm(biggest[0])}–{_fmt_hhmm(biggest[1])}** ({gap} min).",
+                "",
+            ]
+            fit = [t for t in untimed if _duration_min(t) <= gap + 5]
+            if fit:
+                lines.append("W to okno naturalnie zmieszczą się:")
+                for task in fit[:4]:
+                    lines.append(f"• {_task_title(task)} (~{_duration_min(task)} min, p{_priority(task)})")
+            else:
+                lines.append("Nie masz dziś zadania bez godziny, które naturalnie wypełni to okno.")
+                lines.extend(_generic_suggestions())
+            return "\n".join(lines)
+        return "Nie widzę już dziś sensownego wolnego okna. Został tylko ostatni punkt albo dzień jest domknięty."
 
-    windows = _free_windows(timed) if timed else [(DAY_START_MIN, DAY_END_MIN)]
-    current = _current_window(tasks_mod)
-
-    if current is not None:
-        start_w, end_w = current
-        gap = end_w - start_w
-        lines = [f"Aktualne okno: **{_fmt_hhmm(start_w)}–{_fmt_hhmm(end_w)}** ({gap} min)."]
-        fit = [t for t in untimed if _duration_min(t) <= gap]
-        if fit:
-            lines.extend(["", "W tym oknie zmieści się:"])
-            for task in fit[:4]:
-                lines.append(f"• {_task_title(task)} (~{_duration_min(task)} min, p{_priority(task)})")
-        else:
-            lines.extend(["", "Nie widzę dziś zadania bez godziny, które idealnie pasuje do tego okna."])
-            lines.extend(_generic_suggestions())
-        return "\n".join(lines)
-
-    if windows:
-        biggest = max(windows, key=lambda w: w[1] - w[0])
-        gap = biggest[1] - biggest[0]
-        lines = [f"Nie ma już aktywnego okna od teraz, ale największe dzisiejsze okno to **{_fmt_hhmm(biggest[0])}–{_fmt_hhmm(biggest[1])}** ({gap} min)."]
-        fit = [t for t in untimed if _duration_min(t) <= gap]
-        if fit:
-            lines.extend(["", "W tym oknie najlepiej zmieści się:"])
-            for task in fit[:4]:
-                lines.append(f"• {_task_title(task)} (~{_duration_min(task)} min, p{_priority(task)})")
-        else:
-            lines.extend(["", "Nie masz dziś zadania bez godziny, które naturalnie wypełni to okno."])
-            lines.extend(_generic_suggestions())
-        return "\n".join(lines)
-
-    if untimed:
-        task = untimed[0]
-        return (
-            "Nie widzę już dziś wyraźnego wolnego okna między punktami, ale możesz jeszcze zrobić:"
-            f"\n• {_task_title(task)} (~{_duration_min(task)} min, p{_priority(task)})"
-        )
-    return "Nie widzę już dziś sensownego wolnego okna. Został tylko ostatni punkt albo dzień jest domknięty."
+    start_w, end_w = win
+    gap = end_w - start_w
+    lines = [f"Aktualne okno: **{_fmt_hhmm(start_w)}–{_fmt_hhmm(end_w)}** ({gap} min)."]
+    fit = [t for t in untimed if _duration_min(t) <= gap]
+    if fit:
+        lines.extend(["", "W tym oknie zmieści się:"])
+        for task in fit[:4]:
+            lines.append(f"• {_task_title(task)} (~{_duration_min(task)} min, p{_priority(task)})")
+    else:
+        lines.extend(["", "Nie widzę dziś zadania bez godziny, które idealnie pasuje do tego okna."])
+        lines.extend(_generic_suggestions())
+    return "\n".join(lines)
 
 
 def daily_next_step(tasks_mod, origin: Optional[str], default_mode: Optional[str], buffer_min: int = DEFAULT_BUFFER_MIN) -> str:
@@ -646,22 +676,8 @@ def daily_next_step(tasks_mod, origin: Optional[str], default_mode: Optional[str
 
     if untimed:
         task = untimed[0]
-        lines = [
-            "Na dziś nie masz już pilniejszego punktu z godziną.",
-            f"Najlepszy następny krok: **{_task_title(task)}** (~{_duration_min(task)} min, p{_priority(task)}).",
-        ]
-        if timed:
-            last_start, last_task = timed[-1]
-            lines.extend(["", f"Ostatni twardy punkt dnia: {_fmt_hhmm(last_start)} {_task_title(last_task)}."])
-        return "\n".join(lines)
-
-    if timed:
-        last_start, last_task = timed[-1]
-        tomorrow = _timed_tasks(_tomorrow_tasks(tasks_mod))
-        lines = [f"Na dziś nie widzę już kolejnego kroku po punkcie **{_fmt_hhmm(last_start)} {_task_title(last_task)}**."]
-        if tomorrow:
-            t_start, t_task = tomorrow[0]
-            lines.append(f"Jutro zaczynasz od: **{_fmt_hhmm(t_start)} {_task_title(t_task)}**.")
-        lines.append("Możesz zamknąć dzień, zrobić przegląd inboxa albo zaplanować jutro.")
-        return "\n".join(lines)
+        return (
+            f"Najlepszy następny krok: **{_task_title(task)}** (~{_duration_min(task)} min, p{_priority(task)}).\n"
+            "To dobre miejsce na małe elastyczne zadanie przed zamknięciem dnia."
+        )
     return "Na dziś nie widzę już kolejnego kroku. Możesz zamknąć dzień albo zaplanować jutro."
