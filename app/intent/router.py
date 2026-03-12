@@ -815,14 +815,14 @@ def route_intent(message: str, persona: str = "b2c", mode: Optional[str] = None,
         except Exception:
             return _as_reply("context_postpone", "Nie mogę teraz przełożyć mniej ważnych zadań.")
 
-    if low in {"zaplanuj mi dzień automatycznie", "zaplanuj mi dzien automatycznie", "ułóż mi dzień automatycznie", "uloz mi dzien automatycznie", "autoplan dnia"}:
+    if low in {"zaplanuj mi dzień automatycznie", "zaplanuj mi dzien automatycznie", "ułóż mi dzień automatycznie", "uloz mi dzien automatycznie"}:
         try:
             from app.b2c.context_ai import auto_plan_day
             return _as_reply("context_autoplan", auto_plan_day(tasks_mod, _get_origin_address(), _get_place("travel_mode_default") or "samochod", buffer_min=TRAVEL_BUFFER_MIN))
         except Exception:
             return _as_reply("context_autoplan", "Nie mogę teraz automatycznie zaplanować dnia.")
 
-    if low in {"zaplanuj cały mój dzień", "zaplanuj caly moj dzien", "zaplanuj cały dzień", "zaplanuj caly dzien"}:
+    if low in {"zaplanuj cały mój dzień", "zaplanuj caly moj dzien", "zaplanuj cały dzień", "zaplanuj caly dzien", "zaplanuj mój dzień", "zaplanuj moj dzien", "autoplan dnia", "ułóż dzień automatycznie", "uloz dzien automatycznie"}:
         try:
             from app.b2c.context_ai import plan_whole_day
             return _as_reply("context_plan_whole_day", plan_whole_day(tasks_mod, _get_origin_address(), _get_place("travel_mode_default") or "samochod", buffer_min=TRAVEL_BUFFER_MIN))

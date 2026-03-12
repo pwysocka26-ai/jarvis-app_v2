@@ -409,39 +409,28 @@ def list_tasks_for_date(d) -> List[Dict[str, Any]]:
     """List tasks for a specific date.
 
     Accepts 'YYYY-MM-DD' string, datetime.date or datetime.datetime.
-
-    Important behavior:
-    - tasks with explicit due_at on the requested day are included
-    - tasks without due_at (flexible / "bez godziny") belong to *today* only
-      so they can be used by daily planning without leaking into "jutro"
     """
     from datetime import date as _date, datetime as _datetime
 
     if isinstance(d, _datetime):
-        target_date = d.date()
-        d_str = target_date.isoformat()
+        d_str = d.date().isoformat()
     elif isinstance(d, _date):
-        target_date = d
         d_str = d.isoformat()
     else:
         d_str = str(d)
-        try:
-            target_date = _date.fromisoformat(d_str)
-        except Exception:
-            target_date = None
-
-    today = _date.today()
 
     out: List[Dict[str, Any]] = []
+    today_str = _date.today().isoformat()
     for t in load_tasks():
         if not isinstance(t, dict):
             continue
         due_raw = t.get("due_at")
-        if isinstance(due_raw, str) and due_raw.startswith(d_str):
+        due = str(due_raw or "")
+        if due.startswith(d_str):
             out.append(t)
             continue
-        # Flexible tasks (no due_at) should belong to today's daily context only.
-        if due_raw in (None, "") and target_date == today:
+        # Tasks without an explicit date/time are treated as flexible tasks for *today* only.
+        if due_raw in (None, "") and d_str == today_str:
             out.append(t)
 
     def _sort_key(t: Dict[str, Any]):
