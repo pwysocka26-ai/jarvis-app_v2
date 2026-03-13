@@ -707,7 +707,6 @@ def memory_brain_reply(tasks_mod) -> str:
     log_memory_event('memory_check', {'tasks_today': len(tasks)})
     return summary
 
-
 def smart_task_brain_reply(tasks_mod, origin: Optional[str], default_mode: Optional[str], buffer_min: int = DEFAULT_BUFFER_MIN) -> str:
     lines = [f"SMART TASK BRAIN — {_today_iso()}", ""]
     try:
@@ -728,4 +727,47 @@ def smart_task_brain_reply(tasks_mod, origin: Optional[str], default_mode: Optio
             lines.extend(["", energy_reply])
     except Exception:
         pass
+    return "\n".join(lines)
+
+def learning_brain_reply(tasks_mod) -> str:
+    tasks = _today_tasks(tasks_mod)
+    timed = _timed_tasks(tasks)
+    untimed = _untimed_tasks(tasks)
+
+    title_buckets: Dict[str, int] = {}
+    duration_buckets: Dict[str, int] = {"short": 0, "medium": 0, "long": 0}
+
+    for t in tasks:
+        title = _task_title(t).lower()
+        for token in ["mail", "inbox", "telefon", "zakupy", "trening", "notatk", "pomysł", "pomysl"]:
+            if token in title:
+                title_buckets[token] = title_buckets.get(token, 0) + 1
+        dur = _duration_min(t)
+        if dur <= 20:
+            duration_buckets["short"] += 1
+        elif dur <= 40:
+            duration_buckets["medium"] += 1
+        else:
+            duration_buckets["long"] += 1
+
+    lines = [f"LEARNING BRAIN — {_today_iso()}", ""]
+    lines.append(f"Dziś widzę {len(tasks)} zadań: {len(timed)} z godziną i {len(untimed)} elastycznych.")
+
+    if title_buckets:
+        lines.extend(["", "Najczęstsze typy zadań dziś:"])
+        for name, count in sorted(title_buckets.items(), key=lambda kv: (-kv[1], kv[0]))[:5]:
+            lines.append(f"• {name}: {count}")
+
+    lines.extend(["", "Szacowany profil dnia:"])
+    lines.append(f"• krótkie bloki: {duration_buckets['short']}")
+    lines.append(f"• średnie bloki: {duration_buckets['medium']}")
+    lines.append(f"• dłuższe bloki: {duration_buckets['long']}")
+
+    if duration_buckets["medium"] >= duration_buckets["long"] and duration_buckets["medium"] >= duration_buckets["short"]:
+        lines.extend(["", "Wniosek: dziś dominuje rytm średnich, organizacyjnych bloków pracy."])
+    elif duration_buckets["long"] > duration_buckets["medium"]:
+        lines.extend(["", "Wniosek: dziś lepiej zostawiać większe okna na dłuższe zadania."])
+    else:
+        lines.extend(["", "Wniosek: dziś dobrze wchodzą krótkie mikro-zadania i szybkie domknięcia."])
+
     return "\n".join(lines)

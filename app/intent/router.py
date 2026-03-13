@@ -787,13 +787,6 @@ def route_intent(message: str, persona: str = "b2c", mode: Optional[str] = None,
     if low in {"następne zadanie", "nastepne zadanie", "co dalej", "następny krok", "nastepny krok"}:
         return _as_reply("brain_next", _brain_next_reply(_brain_today_tasks()))
 
-    if low in {"smart task brain", "smart brain", "brain", "co najlepiej teraz zrobić", "co najlepiej teraz zrobic", "co teraz najlepiej"}:
-        try:
-            from app.b2c.context_ai import smart_task_brain_reply
-            return _as_reply("smart_task_brain", smart_task_brain_reply(tasks_mod, _get_origin_address(), _get_place("travel_mode_default") or "samochod", buffer_min=TRAVEL_BUFFER_MIN))
-        except Exception:
-            return _as_reply("smart_task_brain", "Nie mogę teraz uruchomić Smart Task Brain.")
-
     if low in {
         "co jest dziś najważniejsze", "co jest dzis najwazniejsze",
         "najważniejsze dziś", "najwazniejsze dzis",
@@ -808,7 +801,7 @@ def route_intent(message: str, persona: str = "b2c", mode: Optional[str] = None,
         except Exception:
             return _as_reply("context_all_fit", "Nie mogę teraz sprawdzić całego planu dnia.")
 
-    if low in {"co mogę zrobić w wolnym czasie", "co moge zrobic w wolnym czasie", "co w wolnym czasie", "wolny czas co robić", "wolny czas co robic", "co mogę zrobić w tym oknie czasu", "co moge zrobic w tym oknie czasu", "co zrobić w tym oknie czasu", "co zrobic w tym oknie czasu"}:
+    if low in {"co mogę zrobić w wolnym czasie", "co moge zrobic w wolnym czasie", "co w wolnym czasie", "wolny czas co robić", "wolny czas co robic"}:
         try:
             from app.b2c.context_ai import suggest_for_free_time
             return _as_reply("context_free_time", suggest_for_free_time(tasks_mod))
@@ -874,14 +867,14 @@ def route_intent(message: str, persona: str = "b2c", mode: Optional[str] = None,
         except Exception:
             return _as_reply("daily_prepare_day", "Nie mogę teraz przygotować Twojego dnia.")
 
-    if low in {"co mogę zrobić w tym oknie czasu", "co moge zrobic w tym oknie czasu", "co mogę zrobić w tym oknie", "co moge zrobic w tym oknie", "co zmieści się w tym oknie", "co zmiesci sie w tym oknie"}:
+    if low in {"co mogę zrobić w tym oknie czasu", "co moge zrobic w tym oknie czasu", "co mogę zrobić w tym oknie", "co moge zrobic w tym oknie", "co zmieści się w tym oknie", "co zmiesci sie w tym oknie", "co zrobić w tym oknie czasu", "co zrobic w tym oknie czasu"}:
         try:
             from app.b2c.context_ai import suggest_for_current_window
             return _as_reply("daily_window", suggest_for_current_window(tasks_mod, _get_origin_address(), _get_place("travel_mode_default") or "samochod", buffer_min=TRAVEL_BUFFER_MIN))
         except Exception:
             return _as_reply("daily_window", "Nie mogę teraz ocenić tego okna czasu.")
 
-    m_dynamic_delay = re.match(r'^(sp[oó]źni[łl]am\s+si[eę]|spoznilam\s+sie|op[oó][źz]nienie)\s+(\d{1,3})\s*min(?:ut(?:y)?)?$', low)
+    m_dynamic_delay = re.match(r'^(sp[oó]źni(?:[łl]am|[łl]em)\s+si[eę]|spozni(?:lam|lem)\s+sie|op[oó][źz]nienie)\s+(\d{1,3})\s*min(?:ut(?:y)?)?$', low)
     if m_dynamic_delay:
         try:
             from app.b2c.context_ai import dynamic_day_reply
@@ -890,12 +883,27 @@ def route_intent(message: str, persona: str = "b2c", mode: Optional[str] = None,
         except Exception:
             return _as_reply("dynamic_day", "Nie mogę teraz przeliczyć dnia po opóźnieniu.")
 
-    if low in {"przesuń plan", "przesun plan", "przelicz plan", "dynamic day"}:
+    if low in {"przesuń plan", "przesun plan", "przelicz plan", "przelicz dzień", "przelicz dzien", "dynamic day"}:
         try:
             from app.b2c.context_ai import dynamic_day_reply
             return _as_reply("dynamic_day", dynamic_day_reply(tasks_mod, 0, _get_origin_address(), _get_place("travel_mode_default") or "samochod", buffer_min=TRAVEL_BUFFER_MIN))
         except Exception:
             return _as_reply("dynamic_day", "Nie mogę teraz przeliczyć planu dnia.")
+
+
+    if low in {"smart task brain", "smart brain", "brain", "co najlepiej teraz zrobić", "co najlepiej teraz zrobic", "co teraz najlepiej"}:
+        try:
+            from app.b2c.context_ai import smart_task_brain_reply
+            return _as_reply("smart_task_brain", smart_task_brain_reply(tasks_mod, _get_origin_address(), _get_place("travel_mode_default") or "samochod", buffer_min=TRAVEL_BUFFER_MIN))
+        except Exception:
+            return _as_reply("smart_task_brain", "Nie mogę teraz uruchomić Smart Task Brain.")
+
+    if low in {"learning brain", "learning", "uczący mózg", "uczacy mozg", "jak uczysz się mojego dnia", "jak uczysz sie mojego dnia", "czego się nauczyłeś", "czego sie nauczyles"}:
+        try:
+            from app.b2c.context_ai import learning_brain_reply
+            return _as_reply("learning_brain", learning_brain_reply(tasks_mod))
+        except Exception:
+            return _as_reply("learning_brain", "Nie mogę teraz uruchomić Learning Brain.")
 
     if low in {"energia dnia", "energia", "poziom energii"}:
         try:
