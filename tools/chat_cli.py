@@ -356,7 +356,8 @@ def main() -> int:
                     val = parts[1].strip().lower()
                     new = val in {"1", "on", "true", "yes"}
                     os.environ["JARVIS_CLI_DEBUG"] = "1" if new else "0"
-                    print(f"Jarvis> OK (następny start CLI): DEBUG={'ON' if new else 'OFF'}")
+                    globals()["DEBUG"] = new
+                    print(f"Jarvis> OK: DEBUG={'ON' if new else 'OFF'}")
                 continue
 
             # --- send to API ---
