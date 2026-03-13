@@ -90,6 +90,45 @@ def _try_handle_memory(message: str) -> Dict[str, Any] | None:
         _clear_pending_flows()
         return _as_reply("memory_remember", "✅ Zapamiętałem.")
 
+    if low.startswith("co pamiętam o ") or low.startswith("co pamietam o "):
+        query = raw.split(" o ", 1)[1].strip() if " o " in low else ""
+        facts = _list_facts()
+        _clear_pending_flows()
+        hits = [f for f in facts if query and query.lower() in f.lower()]
+        if hits:
+            body = "\n".join(f"• {fact}" for fact in hits)
+            return _as_reply("memory_recall", f"Pamiętam o {query}:\n{body}")
+        return _as_reply("memory_recall", f"Nie mam jeszcze nic konkretnego o {query}.")
+
+    if low in {"pamięć dnia", "pamiec dnia", "memory brain", "memory day"}:
+        try:
+            from app.b2c import tasks as tasks_mod
+            from datetime import date as _date
+            today = _date.today().isoformat()
+            tasks = tasks_mod.list_tasks_for_date(today) or []
+            facts = _list_facts()
+            lines = [f"MEMORY BRAIN — {today}", "", "Dzisiejsze zadania:"]
+            if tasks:
+                for t in tasks[:10]:
+                    title = str(t.get('title') or t.get('text') or '').strip()
+                    due = str(t.get('due_at') or '')
+                    if 'T' in due:
+                        lines.append(f"• {due.split('T',1)[1][:5]} {title}")
+                    else:
+                        lines.append(f"• {title}")
+            else:
+                lines.append("• brak")
+            lines.append("")
+            if facts:
+                lines.append("Pamięć:")
+                lines.extend([f"• {f}" for f in facts[:10]])
+            else:
+                lines.append("Pamięć jest jeszcze lekka. Użyj: `zapamiętaj: ...` i notatek albo reminders.")
+            _clear_pending_flows()
+            return _as_reply("memory_day", "\n".join(lines))
+        except Exception:
+            return _as_reply("memory_day", "Nie mogę teraz przygotować pamięci dnia.")
+
     if low in {"pamięć", "pamiec", "pokaż pamięć", "pokaz pamiec", "co pamiętasz", "co pamietasz"}:
         facts = _list_facts()
         _clear_pending_flows()
