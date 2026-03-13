@@ -2,11 +2,8 @@ from __future__ import annotations
 
 from datetime import date, datetime, timedelta
 from typing import Any, Dict, List, Optional, Tuple
-import json
-import os
 
 from app.b2c.maps_google import get_eta_minutes
-from app.b2c.cognitive_layer import energy_advice, memory_summary, log_memory_event
 
 DAY_START_MIN = 6 * 60
 DAY_END_MIN = 21 * 60
@@ -628,307 +625,43 @@ def daily_next_step(tasks_mod, origin: Optional[str], default_mode: Optional[str
     return "Na dziś nie widzę już kolejnego kroku. Możesz zamknąć dzień albo zaplanować jutro."
 
 
-def dynamic_day_reply(tasks_mod, delay_min: int, origin: Optional[str], default_mode: Optional[str], buffer_min: int = DEFAULT_BUFFER_MIN) -> str:
+
+def autopilot_now(tasks_mod, origin: Optional[str], default_mode: Optional[str], buffer_min: int = DEFAULT_BUFFER_MIN) -> str:
+    """Suggest the best action to do right now using existing Daily Brain helpers."""
     tasks = _today_tasks(tasks_mod)
     timed = _timed_tasks(tasks)
     untimed = sorted(_untimed_tasks(tasks), key=lambda t: (_priority(t), str(t.get("created_at") or "")))
     now = datetime.now()
     now_min = now.hour * 60 + now.minute
-    delay_min = max(0, int(delay_min or 0))
 
-    lines = [f"DYNAMIC DAY — {_today_iso()}", ""]
-    if not timed and not untimed:
-        return "Na dziś nie mam żadnych zadań do przeplanowania."
+    if timed:
+        for start_min, task in timed:
+            if start_min >= now_min:
+                loc = _task_location(task)
+                mode = task.get("travel_mode") or default_mode or "samochod"
+                eta = _eta_minutes(origin, loc, mode) if origin and loc else 0
+                leave_min = start_min - eta - buffer_min if eta else start_min
+                slack = max(0, leave_min - now_min)
+                if now_min >= leave_min:
+                    return "Autopilot: pora szykować się do następnego punktu.\n\n" + prepare_for_next_task(tasks_mod, origin, default_mode, buffer_min=buffer_min)
+                if slack >= 15 and untimed:
+                    fit = [t for t in untimed if _duration_min(t) <= slack]
+                    if fit:
+                        best = fit[0]
+                        return (
+                            f"Autopilot: najlepszy następny krok to **{_task_title(best)}** "
+                            f"(~{_duration_min(best)} min, p{_priority(best)}).\n"
+                            f"Masz jeszcze około **{slack} min** do momentu przygotowania do **{_task_title(task)}**."
+                        )
+                return "Autopilot: pora szykować się do następnego punktu.\n\n" + prepare_for_next_task(tasks_mod, origin, default_mode, buffer_min=buffer_min)
 
-    if delay_min:
-        lines.append(f"Uwzględniam opóźnienie: **{delay_min} min**.")
-    else:
-        lines.append("Przeliczam plan od teraz.")
-
-    anchor = now_min + delay_min
-    future_timed = [(s, t) for s, t in timed if s >= anchor]
-    if future_timed:
-        lines.append("")
-        lines.append("Najbliższe stałe punkty po korekcie:")
-        for s, t in future_timed[:5]:
-            lines.append(f"• {_fmt_hhmm(s)} {_task_title(t)}")
-    else:
-        lines.append("")
-        lines.append("Nie masz już dziś kolejnych twardych punktów po tej korekcie.")
-
-    horizon_end = DAY_END_MIN
-    if future_timed:
-        first_future = future_timed[0][0]
-        if first_future - anchor >= 15:
-            lines.append("")
-            lines.append(f"Masz okno **{_fmt_hhmm(anchor)}–{_fmt_hhmm(first_future)}** ({first_future-anchor} min).")
-            fit = [t for t in untimed if _duration_min(t) <= max(15, first_future-anchor)]
-            if fit:
-                lines.append("W tym czasie zmieści się:")
-                for t in fit[:3]:
-                    lines.append(f"• {_task_title(t)} (~{_duration_min(t)} min, p{_priority(t)})")
-        else:
-            lines.append("")
-            lines.append("Do najbliższego punktu nie ma już dużego bufora — skup się na domknięciu bieżącej rzeczy i przygotowaniu wyjścia.")
-    else:
-        if untimed:
-            lines.append("")
-            lines.append(f"Do końca dnia zostało okno **{_fmt_hhmm(anchor)}–{_fmt_hhmm(horizon_end)}** ({max(0,horizon_end-anchor)} min).")
-            lines.append("Najlepiej teraz zrobić:")
-            for t in untimed[:3]:
-                lines.append(f"• {_task_title(t)} (~{_duration_min(t)} min, p{_priority(t)})")
-        else:
-            lines.append("")
-            lines.extend(_generic_suggestions())
-
-    log_memory_event('dynamic_day', {'delay_min': delay_min, 'future_fixed': len(future_timed), 'untimed': len(untimed)})
-    return "\n".join(lines)
-
-
-def energy_day_reply(tasks_mod) -> str:
-    tasks = _today_tasks(tasks_mod)
-    untimed = sorted(_untimed_tasks(tasks), key=lambda t: (_priority(t), str(t.get('created_at') or '')) )
-    timed = _timed_tasks(tasks)
-    advice = energy_advice(tasks)
-    log_memory_event('energy_check', {'tasks_today': len(tasks)})
-    lines = [advice]
     if untimed:
-        lines.append("")
-        lines.append("Najlepsze elastyczne zadania na ten poziom energii:")
-        for t in untimed[:3]:
-            lines.append(f"• {_task_title(t)} (~{_duration_min(t)} min, p{_priority(t)})")
-    elif timed:
-        lines.append("")
-        lines.append("Masz dziś głównie stałe punkty — między nimi zostaw sobie tylko lekkie mikro-rzeczy.")
-    return "\n".join(lines)
+        best = untimed[0]
+        return f"Autopilot: najlepszy następny krok to **{_task_title(best)}** (~{_duration_min(best)} min, p{_priority(best)})."
+
+    return "Autopilot: na dziś nie widzę już sensownego kolejnego kroku. Możesz zamknąć dzień albo zaplanować jutro."
 
 
-def memory_brain_reply(tasks_mod) -> str:
-    tasks = _today_tasks(tasks_mod)
-    summary = memory_summary(tasks)
-    log_memory_event('memory_check', {'tasks_today': len(tasks)})
-    return summary
-
-_BRAIN_FILE = os.path.join("data", "memory", "brain_patterns.json")
-
-
-def _brain_tokens_from_tasks(tasks: List[Dict[str, Any]]) -> Dict[str, int]:
-    buckets: Dict[str, int] = {}
-    for t in tasks:
-        title = _task_title(t).lower()
-        for token in ["mail", "inbox", "telefon", "zakupy", "trening", "notatk", "pomysł", "pomysl", "sprząt", "sprzat"]:
-            if token in title:
-                buckets[token] = buckets.get(token, 0) + 1
-    return buckets
-
-
-def _load_persistent_brain() -> Dict[str, Any]:
-    try:
-        if os.path.exists(_BRAIN_FILE):
-            with open(_BRAIN_FILE, "r", encoding="utf-8") as f:
-                data = json.load(f)
-                if isinstance(data, dict):
-                    return data
-    except Exception:
-        pass
-    return {
-        "days_seen": 0,
-        "last_day": "",
-        "task_type_counts": {},
-        "duration_profile": {"short": 0, "medium": 0, "long": 0},
-        "time_of_day": {"morning": 0, "afternoon": 0, "evening": 0},
-    }
-
-
-def _save_persistent_brain(data: Dict[str, Any]) -> None:
-    os.makedirs(os.path.dirname(_BRAIN_FILE), exist_ok=True)
-    with open(_BRAIN_FILE, "w", encoding="utf-8") as f:
-        json.dump(data, f, ensure_ascii=False, indent=2)
-
-
-def _duration_profile_from_tasks(tasks: List[Dict[str, Any]]) -> Dict[str, int]:
-    out = {"short": 0, "medium": 0, "long": 0}
-    for t in tasks:
-        dur = _duration_min(t)
-        if dur <= 20:
-            out["short"] += 1
-        elif dur <= 40:
-            out["medium"] += 1
-        else:
-            out["long"] += 1
-    return out
-
-
-def _time_profile_from_timed(timed: List[Tuple[int, Dict[str, Any]]]) -> Dict[str, int]:
-    out = {"morning": 0, "afternoon": 0, "evening": 0}
-    for start, _ in timed:
-        if start < 12 * 60:
-            out["morning"] += 1
-        elif start < 18 * 60:
-            out["afternoon"] += 1
-        else:
-            out["evening"] += 1
-    return out
-
-
-def _merge_counts(base: Dict[str, int], add: Dict[str, int]) -> Dict[str, int]:
-    merged = dict(base)
-    for k, v in add.items():
-        merged[k] = int(merged.get(k, 0)) + int(v)
-    return merged
-
-
-def _update_persistent_brain(tasks_mod) -> Dict[str, Any]:
-    data = _load_persistent_brain()
-    today = _today_iso()
-    if data.get("last_day") == today:
-        return data
-
-    tasks = _today_tasks(tasks_mod)
-    timed = _timed_tasks(tasks)
-
-    data["days_seen"] = int(data.get("days_seen", 0)) + 1
-    data["last_day"] = today
-    data["task_type_counts"] = _merge_counts(data.get("task_type_counts", {}), _brain_tokens_from_tasks(tasks))
-    data["duration_profile"] = _merge_counts(data.get("duration_profile", {}), _duration_profile_from_tasks(tasks))
-    data["time_of_day"] = _merge_counts(data.get("time_of_day", {}), _time_profile_from_timed(timed))
-    _save_persistent_brain(data)
-    return data
-
-def smart_task_brain_reply(tasks_mod, origin: Optional[str], default_mode: Optional[str], buffer_min: int = DEFAULT_BUFFER_MIN) -> str:
-    lines = [f"SMART TASK BRAIN — {_today_iso()}", ""]
-    try:
-        next_step = daily_next_step(tasks_mod, origin, default_mode, buffer_min=buffer_min)
-        if next_step:
-            lines.append(next_step)
-    except Exception:
-        lines.append("Nie mogę jeszcze wskazać najlepszego następnego kroku.")
-    try:
-        window_reply = suggest_for_current_window(tasks_mod, origin, default_mode, buffer_min=buffer_min)
-        if window_reply:
-            lines.extend(["", window_reply])
-    except Exception:
-        pass
-    try:
-        energy_reply = energy_day_reply(tasks_mod)
-        if energy_reply:
-            lines.extend(["", energy_reply])
-    except Exception:
-        pass
-    return "\n".join(lines)
-
-def learning_brain_reply(tasks_mod) -> str:
-    tasks = _today_tasks(tasks_mod)
-    timed = _timed_tasks(tasks)
-    untimed = _untimed_tasks(tasks)
-
-    title_buckets = _brain_tokens_from_tasks(tasks)
-    duration_buckets = _duration_profile_from_tasks(tasks)
-
-    lines = [f"LEARNING BRAIN — {_today_iso()}", ""]
-    lines.append(f"Dziś widzę {len(tasks)} zadań: {len(timed)} z godziną i {len(untimed)} elastycznych.")
-    if title_buckets:
-        lines.extend(["", "Najczęstsze typy zadań dziś:"])
-        for name, count in sorted(title_buckets.items(), key=lambda kv: (-kv[1], kv[0]))[:5]:
-            lines.append(f"• {name}: {count}")
-    lines.extend(["", "Szacowany profil dnia:"])
-    lines.append(f"• krótkie bloki: {duration_buckets['short']}")
-    lines.append(f"• średnie bloki: {duration_buckets['medium']}")
-    lines.append(f"• dłuższe bloki: {duration_buckets['long']}")
-    return "\n".join(lines)
-
-def memory_patterns_reply(tasks_mod) -> str:
-    tasks = _today_tasks(tasks_mod)
-    timed = _timed_tasks(tasks)
-    untimed = _untimed_tasks(tasks)
-
-    morning = sum(1 for start, _ in timed if start < 12 * 60)
-    afternoon = sum(1 for start, _ in timed if 12 * 60 <= start < 18 * 60)
-    evening = sum(1 for start, _ in timed if start >= 18 * 60)
-
-    lines = [f"MEMORY PATTERNS — {_today_iso()}", ""]
-    lines.append(f"Stałe punkty: rano {morning}, popołudnie {afternoon}, wieczór {evening}.")
-    lines.append(f"Elastyczne zadania dziś: {len(untimed)}.")
-    if morning >= afternoon and morning >= evening:
-        lines.append("Wzorzec dnia: dziś najwięcej dzieje się rano.")
-    elif afternoon >= evening:
-        lines.append("Wzorzec dnia: dziś główny ciężar planu jest po południu.")
-    else:
-        lines.append("Wzorzec dnia: dziś więcej rzeczy przesuwa się na wieczór.")
-    if untimed:
-        top = sorted(untimed, key=lambda t: (_priority(t), str(t.get("created_at") or "")))[:3]
-        lines.extend(["", "Najbardziej typowe elastyczne zadania dziś:"])
-        for t in top:
-            lines.append(f"• {_task_title(t)} (~{_duration_min(t)} min, p{_priority(t)})")
-    return "\n".join(lines)
-
-def predictive_planner_reply(tasks_mod, origin: Optional[str], default_mode: Optional[str], buffer_min: int = DEFAULT_BUFFER_MIN) -> str:
-    lines = [f"PREDICTIVE PLANNER — {_today_iso()}", ""]
-    try:
-        lines.append(daily_next_step(tasks_mod, origin, default_mode, buffer_min=buffer_min))
-    except Exception:
-        pass
-    try:
-        lines.extend(["", suggest_for_current_window(tasks_mod, origin, default_mode, buffer_min=buffer_min)])
-    except Exception:
-        pass
-    try:
-        lines.extend(["", memory_patterns_reply(tasks_mod)])
-    except Exception:
-        pass
-    return "\n".join([line for line in lines if line is not None])
-
-def inbox_intelligence_reply() -> str:
-    try:
-        from app.b2c import inbox as inbox_mod
-        data = inbox_mod.list_inbox()
-        items = data if isinstance(data, list) else data.get("items", [])
-    except Exception:
-        items = []
-
-    if not items:
-        return "INBOX INTELLIGENCE\n\nInbox jest pusty albo nie mam jeszcze czego przeanalizować."
-
-    lines = ["INBOX INTELLIGENCE", "", "Potencjalne taski z inboxa:"]
-    count = 0
-    for item in items[:10]:
-        text = str(item.get("text") or item.get("title") or "").strip()
-        low = text.lower()
-        if any(k in low for k in ["zadzwo", "napisz", "umów", "umow", "kup", "przygotuj", "wyślij", "wyslij", "oddaj", "sprawdź", "sprawdz"]):
-            lines.append(f"• {text}")
-            count += 1
-    if count == 0:
-        lines.append("• Nie widzę jeszcze wyraźnych zadań — wygląda bardziej na notatki i pomysły.")
-    return "\n".join(lines)
-
-def persist_today_patterns_reply(tasks_mod) -> str:
-    data = _update_persistent_brain(tasks_mod)
-    return f"Trwała pamięć zaktualizowana. Zapisane dni: {data.get('days_seen', 0)}."
-
-def persistent_brain_reply(tasks_mod) -> str:
-    data = _update_persistent_brain(tasks_mod)
-
-    lines = ["PERSISTENT BRAIN", ""]
-    lines.append(f"Zapamiętane dni: {data.get('days_seen', 0)}")
-
-    type_counts = data.get("task_type_counts", {})
-    if type_counts:
-        lines.extend(["", "Najczęstsze typy zadań między dniami:"])
-        for name, count in sorted(type_counts.items(), key=lambda kv: (-kv[1], kv[0]))[:5]:
-            lines.append(f"• {name}: {count}")
-
-    dur = data.get("duration_profile", {})
-    lines.extend(["", "Profil bloków między dniami:"])
-    lines.append(f"• krótkie: {int(dur.get('short', 0))}")
-    lines.append(f"• średnie: {int(dur.get('medium', 0))}")
-    lines.append(f"• długie: {int(dur.get('long', 0))}")
-
-    tod = data.get("time_of_day", {})
-    lines.extend(["", "Rytm dnia między dniami:"])
-    lines.append(f"• rano: {int(tod.get('morning', 0))}")
-    lines.append(f"• popołudnie: {int(tod.get('afternoon', 0))}")
-    lines.append(f"• wieczór: {int(tod.get('evening', 0))}")
-
-    dominant = max([("rano", int(tod.get("morning", 0))), ("po południu", int(tod.get("afternoon", 0))), ("wieczorem", int(tod.get("evening", 0)))], key=lambda x: x[1])[0]
-    lines.extend(["", f"Wniosek: najwięcej rzeczy zwykle dzieje się {dominant}."])
-    return "\n".join(lines)
+def autopilot_day(tasks_mod, origin: Optional[str], default_mode: Optional[str], buffer_min: int = DEFAULT_BUFFER_MIN) -> str:
+    """Alias for whole-day automatic planning with a slightly more product-like heading."""
+    return plan_whole_day(tasks_mod, origin, default_mode, buffer_min=buffer_min)

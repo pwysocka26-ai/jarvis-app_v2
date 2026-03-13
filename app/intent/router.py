@@ -815,12 +815,26 @@ def route_intent(message: str, persona: str = "b2c", mode: Optional[str] = None,
         except Exception:
             return _as_reply("context_postpone", "Nie mogę teraz przełożyć mniej ważnych zadań.")
 
-    if low in {"zaplanuj mi dzień automatycznie", "zaplanuj mi dzien automatycznie", "ułóż mi dzień automatycznie", "uloz mi dzien automatycznie", "autoplan dnia", "zaplanuj mój dzień", "zaplanuj moj dzien"}:
+    if low in {"zaplanuj mi dzień automatycznie", "zaplanuj mi dzien automatycznie", "ułóż mi dzień automatycznie", "uloz mi dzien automatycznie", "autoplan dnia"}:
         try:
             from app.b2c.context_ai import auto_plan_day
             return _as_reply("context_autoplan", auto_plan_day(tasks_mod, _get_origin_address(), _get_place("travel_mode_default") or "samochod", buffer_min=TRAVEL_BUFFER_MIN))
         except Exception:
             return _as_reply("context_autoplan", "Nie mogę teraz automatycznie zaplanować dnia.")
+
+    if low in {"co teraz robić", "co teraz robic", "autopilot", "autopilot teraz"}:
+        try:
+            from app.b2c.context_ai import autopilot_now
+            return _as_reply("autopilot_now", autopilot_now(tasks_mod, _get_origin_address(), _get_place("travel_mode_default") or "samochod", buffer_min=TRAVEL_BUFFER_MIN))
+        except Exception:
+            return _as_reply("autopilot_now", "Nie mogę teraz uruchomić autopilota.")
+
+    if low in {"zaplanuj dzień automatycznie", "zaplanuj dzien automatycznie", "autopilot dnia"}:
+        try:
+            from app.b2c.context_ai import autopilot_day
+            return _as_reply("autopilot_day", autopilot_day(tasks_mod, _get_origin_address(), _get_place("travel_mode_default") or "samochod", buffer_min=TRAVEL_BUFFER_MIN))
+        except Exception:
+            return _as_reply("autopilot_day", "Nie mogę teraz automatycznie zaplanować dnia.")
 
     if low in {"zaplanuj cały mój dzień", "zaplanuj caly moj dzien", "zaplanuj cały dzień", "zaplanuj caly dzien"}:
         try:
@@ -867,86 +881,12 @@ def route_intent(message: str, persona: str = "b2c", mode: Optional[str] = None,
         except Exception:
             return _as_reply("daily_prepare_day", "Nie mogę teraz przygotować Twojego dnia.")
 
-    if low in {"co mogę zrobić w tym oknie czasu", "co moge zrobic w tym oknie czasu", "co mogę zrobić w tym oknie", "co moge zrobic w tym oknie", "co zmieści się w tym oknie", "co zmiesci sie w tym oknie", "co zrobić w tym oknie czasu", "co zrobic w tym oknie czasu"}:
+    if low in {"co mogę zrobić w tym oknie czasu", "co moge zrobic w tym oknie czasu", "co mogę zrobić w tym oknie", "co moge zrobic w tym oknie", "co zmieści się w tym oknie", "co zmiesci sie w tym oknie"}:
         try:
             from app.b2c.context_ai import suggest_for_current_window
             return _as_reply("daily_window", suggest_for_current_window(tasks_mod, _get_origin_address(), _get_place("travel_mode_default") or "samochod", buffer_min=TRAVEL_BUFFER_MIN))
         except Exception:
             return _as_reply("daily_window", "Nie mogę teraz ocenić tego okna czasu.")
-
-    m_dynamic_delay = re.match(r'^(sp[oó]źni(?:[łl]am|[łl]em)\s+si[eę]|spozni(?:lam|lem)\s+sie|op[oó][źz]nienie)\s+(\d{1,3})\s*min(?:ut(?:y)?)?$', low)
-    if m_dynamic_delay:
-        try:
-            from app.b2c.context_ai import dynamic_day_reply
-            delay_min = int(m_dynamic_delay.group(2))
-            return _as_reply("dynamic_day", dynamic_day_reply(tasks_mod, delay_min, _get_origin_address(), _get_place("travel_mode_default") or "samochod", buffer_min=TRAVEL_BUFFER_MIN))
-        except Exception:
-            return _as_reply("dynamic_day", "Nie mogę teraz przeliczyć dnia po opóźnieniu.")
-
-    if low in {"przesuń plan", "przesun plan", "przelicz plan", "przelicz dzień", "przelicz dzien", "dynamic day"}:
-        try:
-            from app.b2c.context_ai import dynamic_day_reply
-            return _as_reply("dynamic_day", dynamic_day_reply(tasks_mod, 0, _get_origin_address(), _get_place("travel_mode_default") or "samochod", buffer_min=TRAVEL_BUFFER_MIN))
-        except Exception:
-            return _as_reply("dynamic_day", "Nie mogę teraz przeliczyć planu dnia.")
-
-
-    if low in {"smart task brain", "smart brain", "brain", "co najlepiej teraz zrobić", "co najlepiej teraz zrobic", "co teraz najlepiej"}:
-        try:
-            from app.b2c.context_ai import smart_task_brain_reply
-            return _as_reply("smart_task_brain", smart_task_brain_reply(tasks_mod, _get_origin_address(), _get_place("travel_mode_default") or "samochod", buffer_min=TRAVEL_BUFFER_MIN))
-        except Exception:
-            return _as_reply("smart_task_brain", "Nie mogę teraz uruchomić Smart Task Brain.")
-
-    if low in {"learning brain", "learning", "uczący mózg", "uczacy mozg", "jak uczysz się mojego dnia", "jak uczysz sie mojego dnia", "czego się nauczyłeś", "czego sie nauczyles"}:
-        try:
-            from app.b2c.context_ai import learning_brain_reply
-            return _as_reply("learning_brain", learning_brain_reply(tasks_mod))
-        except Exception:
-            return _as_reply("learning_brain", "Nie mogę teraz uruchomić Learning Brain.")
-
-    if low in {"memory patterns", "co pamiętasz o moim dniu", "co pamietasz o moim dniu", "jakie masz wzorce", "wzorce dnia"}:
-        try:
-            from app.b2c.context_ai import memory_patterns_reply
-            return _as_reply("memory_patterns", memory_patterns_reply(tasks_mod))
-        except Exception:
-            return _as_reply("memory_patterns", "Nie mogę teraz odczytać wzorców dnia.")
-
-    if low in {"predictive planner", "predictive brain", "co proponujesz teraz", "co proponujesz dzisiaj", "co proponujesz dziś", "co proponujesz"}:
-        try:
-            from app.b2c.context_ai import predictive_planner_reply
-            return _as_reply("predictive_planner", predictive_planner_reply(tasks_mod, _get_origin_address(), _get_place("travel_mode_default") or "samochod", buffer_min=TRAVEL_BUFFER_MIN))
-        except Exception:
-            return _as_reply("predictive_planner", "Nie mogę teraz uruchomić Predictive Planner.")
-
-    if low in {"persistent brain", "persistent memory", "co pamiętasz między dniami", "co pamietasz miedzy dniami", "pamięć między dniami", "pamiec miedzy dniami"}:
-        try:
-            from app.b2c.context_ai import persistent_brain_reply
-            return _as_reply("persistent_brain", persistent_brain_reply(tasks_mod))
-        except Exception:
-            return _as_reply("persistent_brain", "Nie mogę teraz odczytać trwałej pamięci.")
-
-    if low in {"zapisz wzorce dnia", "zapisz pamiec dnia", "zapisz pamięć dnia", "zapisz brain"}:
-        try:
-            from app.b2c.context_ai import persist_today_patterns_reply
-            return _as_reply("persistent_brain_save", persist_today_patterns_reply(tasks_mod))
-        except Exception:
-            return _as_reply("persistent_brain_save", "Nie mogę teraz zapisać wzorców dnia.")
-
-    if low in {"energia dnia", "energia", "poziom energii"}:
-        try:
-            from app.b2c.context_ai import energy_day_reply
-            return _as_reply("energy_day", energy_day_reply(tasks_mod))
-        except Exception:
-            return _as_reply("energy_day", "Nie mogę teraz ocenić energii dnia.")
-
-    if low in {"memory brain", "pamięć dnia", "pamiec dnia", "statystyki dnia"}:
-        try:
-            from app.b2c.context_ai import memory_brain_reply
-            return _as_reply("memory_brain", memory_brain_reply(tasks_mod))
-        except Exception:
-            return _as_reply("memory_brain", "Nie mogę teraz odczytać pamięci dnia.")
-
     # =============================
     # INBOX v1
     # =============================
