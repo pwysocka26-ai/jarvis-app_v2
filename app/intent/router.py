@@ -905,6 +905,34 @@ def route_intent(message: str, persona: str = "b2c", mode: Optional[str] = None,
         except Exception:
             return _as_reply("learning_brain", "Nie mogę teraz uruchomić Learning Brain.")
 
+    if low in {"memory patterns", "co pamiętasz o moim dniu", "co pamietasz o moim dniu", "jakie masz wzorce", "wzorce dnia"}:
+        try:
+            from app.b2c.context_ai import memory_patterns_reply
+            return _as_reply("memory_patterns", memory_patterns_reply(tasks_mod))
+        except Exception:
+            return _as_reply("memory_patterns", "Nie mogę teraz odczytać wzorców dnia.")
+
+    if low in {"predictive planner", "predictive brain", "co proponujesz teraz", "co proponujesz dzisiaj", "co proponujesz dziś", "co proponujesz"}:
+        try:
+            from app.b2c.context_ai import predictive_planner_reply
+            return _as_reply("predictive_planner", predictive_planner_reply(tasks_mod, _get_origin_address(), _get_place("travel_mode_default") or "samochod", buffer_min=TRAVEL_BUFFER_MIN))
+        except Exception:
+            return _as_reply("predictive_planner", "Nie mogę teraz uruchomić Predictive Planner.")
+
+    if low in {"persistent brain", "persistent memory", "co pamiętasz między dniami", "co pamietasz miedzy dniami", "pamięć między dniami", "pamiec miedzy dniami"}:
+        try:
+            from app.b2c.context_ai import persistent_brain_reply
+            return _as_reply("persistent_brain", persistent_brain_reply(tasks_mod))
+        except Exception:
+            return _as_reply("persistent_brain", "Nie mogę teraz odczytać trwałej pamięci.")
+
+    if low in {"zapisz wzorce dnia", "zapisz pamiec dnia", "zapisz pamięć dnia", "zapisz brain"}:
+        try:
+            from app.b2c.context_ai import persist_today_patterns_reply
+            return _as_reply("persistent_brain_save", persist_today_patterns_reply(tasks_mod))
+        except Exception:
+            return _as_reply("persistent_brain_save", "Nie mogę teraz zapisać wzorców dnia.")
+
     if low in {"energia dnia", "energia", "poziom energii"}:
         try:
             from app.b2c.context_ai import energy_day_reply

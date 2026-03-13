@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from datetime import date, datetime, timedelta
 from typing import Any, Dict, List, Optional, Tuple
+import json
+import os
 
 from app.b2c.maps_google import get_eta_minutes
 from app.b2c.cognitive_layer import energy_advice, memory_summary, log_memory_event
@@ -707,6 +709,92 @@ def memory_brain_reply(tasks_mod) -> str:
     log_memory_event('memory_check', {'tasks_today': len(tasks)})
     return summary
 
+_BRAIN_FILE = os.path.join("data", "memory", "brain_patterns.json")
+
+
+def _brain_tokens_from_tasks(tasks: List[Dict[str, Any]]) -> Dict[str, int]:
+    buckets: Dict[str, int] = {}
+    for t in tasks:
+        title = _task_title(t).lower()
+        for token in ["mail", "inbox", "telefon", "zakupy", "trening", "notatk", "pomysł", "pomysl", "sprząt", "sprzat"]:
+            if token in title:
+                buckets[token] = buckets.get(token, 0) + 1
+    return buckets
+
+
+def _load_persistent_brain() -> Dict[str, Any]:
+    try:
+        if os.path.exists(_BRAIN_FILE):
+            with open(_BRAIN_FILE, "r", encoding="utf-8") as f:
+                data = json.load(f)
+                if isinstance(data, dict):
+                    return data
+    except Exception:
+        pass
+    return {
+        "days_seen": 0,
+        "last_day": "",
+        "task_type_counts": {},
+        "duration_profile": {"short": 0, "medium": 0, "long": 0},
+        "time_of_day": {"morning": 0, "afternoon": 0, "evening": 0},
+    }
+
+
+def _save_persistent_brain(data: Dict[str, Any]) -> None:
+    os.makedirs(os.path.dirname(_BRAIN_FILE), exist_ok=True)
+    with open(_BRAIN_FILE, "w", encoding="utf-8") as f:
+        json.dump(data, f, ensure_ascii=False, indent=2)
+
+
+def _duration_profile_from_tasks(tasks: List[Dict[str, Any]]) -> Dict[str, int]:
+    out = {"short": 0, "medium": 0, "long": 0}
+    for t in tasks:
+        dur = _duration_min(t)
+        if dur <= 20:
+            out["short"] += 1
+        elif dur <= 40:
+            out["medium"] += 1
+        else:
+            out["long"] += 1
+    return out
+
+
+def _time_profile_from_timed(timed: List[Tuple[int, Dict[str, Any]]]) -> Dict[str, int]:
+    out = {"morning": 0, "afternoon": 0, "evening": 0}
+    for start, _ in timed:
+        if start < 12 * 60:
+            out["morning"] += 1
+        elif start < 18 * 60:
+            out["afternoon"] += 1
+        else:
+            out["evening"] += 1
+    return out
+
+
+def _merge_counts(base: Dict[str, int], add: Dict[str, int]) -> Dict[str, int]:
+    merged = dict(base)
+    for k, v in add.items():
+        merged[k] = int(merged.get(k, 0)) + int(v)
+    return merged
+
+
+def _update_persistent_brain(tasks_mod) -> Dict[str, Any]:
+    data = _load_persistent_brain()
+    today = _today_iso()
+    if data.get("last_day") == today:
+        return data
+
+    tasks = _today_tasks(tasks_mod)
+    timed = _timed_tasks(tasks)
+
+    data["days_seen"] = int(data.get("days_seen", 0)) + 1
+    data["last_day"] = today
+    data["task_type_counts"] = _merge_counts(data.get("task_type_counts", {}), _brain_tokens_from_tasks(tasks))
+    data["duration_profile"] = _merge_counts(data.get("duration_profile", {}), _duration_profile_from_tasks(tasks))
+    data["time_of_day"] = _merge_counts(data.get("time_of_day", {}), _time_profile_from_timed(timed))
+    _save_persistent_brain(data)
+    return data
+
 def smart_task_brain_reply(tasks_mod, origin: Optional[str], default_mode: Optional[str], buffer_min: int = DEFAULT_BUFFER_MIN) -> str:
     lines = [f"SMART TASK BRAIN — {_today_iso()}", ""]
     try:
@@ -734,40 +822,113 @@ def learning_brain_reply(tasks_mod) -> str:
     timed = _timed_tasks(tasks)
     untimed = _untimed_tasks(tasks)
 
-    title_buckets: Dict[str, int] = {}
-    duration_buckets: Dict[str, int] = {"short": 0, "medium": 0, "long": 0}
-
-    for t in tasks:
-        title = _task_title(t).lower()
-        for token in ["mail", "inbox", "telefon", "zakupy", "trening", "notatk", "pomysł", "pomysl"]:
-            if token in title:
-                title_buckets[token] = title_buckets.get(token, 0) + 1
-        dur = _duration_min(t)
-        if dur <= 20:
-            duration_buckets["short"] += 1
-        elif dur <= 40:
-            duration_buckets["medium"] += 1
-        else:
-            duration_buckets["long"] += 1
+    title_buckets = _brain_tokens_from_tasks(tasks)
+    duration_buckets = _duration_profile_from_tasks(tasks)
 
     lines = [f"LEARNING BRAIN — {_today_iso()}", ""]
     lines.append(f"Dziś widzę {len(tasks)} zadań: {len(timed)} z godziną i {len(untimed)} elastycznych.")
-
     if title_buckets:
         lines.extend(["", "Najczęstsze typy zadań dziś:"])
         for name, count in sorted(title_buckets.items(), key=lambda kv: (-kv[1], kv[0]))[:5]:
             lines.append(f"• {name}: {count}")
-
     lines.extend(["", "Szacowany profil dnia:"])
     lines.append(f"• krótkie bloki: {duration_buckets['short']}")
     lines.append(f"• średnie bloki: {duration_buckets['medium']}")
     lines.append(f"• dłuższe bloki: {duration_buckets['long']}")
+    return "\n".join(lines)
 
-    if duration_buckets["medium"] >= duration_buckets["long"] and duration_buckets["medium"] >= duration_buckets["short"]:
-        lines.extend(["", "Wniosek: dziś dominuje rytm średnich, organizacyjnych bloków pracy."])
-    elif duration_buckets["long"] > duration_buckets["medium"]:
-        lines.extend(["", "Wniosek: dziś lepiej zostawiać większe okna na dłuższe zadania."])
+def memory_patterns_reply(tasks_mod) -> str:
+    tasks = _today_tasks(tasks_mod)
+    timed = _timed_tasks(tasks)
+    untimed = _untimed_tasks(tasks)
+
+    morning = sum(1 for start, _ in timed if start < 12 * 60)
+    afternoon = sum(1 for start, _ in timed if 12 * 60 <= start < 18 * 60)
+    evening = sum(1 for start, _ in timed if start >= 18 * 60)
+
+    lines = [f"MEMORY PATTERNS — {_today_iso()}", ""]
+    lines.append(f"Stałe punkty: rano {morning}, popołudnie {afternoon}, wieczór {evening}.")
+    lines.append(f"Elastyczne zadania dziś: {len(untimed)}.")
+    if morning >= afternoon and morning >= evening:
+        lines.append("Wzorzec dnia: dziś najwięcej dzieje się rano.")
+    elif afternoon >= evening:
+        lines.append("Wzorzec dnia: dziś główny ciężar planu jest po południu.")
     else:
-        lines.extend(["", "Wniosek: dziś dobrze wchodzą krótkie mikro-zadania i szybkie domknięcia."])
+        lines.append("Wzorzec dnia: dziś więcej rzeczy przesuwa się na wieczór.")
+    if untimed:
+        top = sorted(untimed, key=lambda t: (_priority(t), str(t.get("created_at") or "")))[:3]
+        lines.extend(["", "Najbardziej typowe elastyczne zadania dziś:"])
+        for t in top:
+            lines.append(f"• {_task_title(t)} (~{_duration_min(t)} min, p{_priority(t)})")
+    return "\n".join(lines)
 
+def predictive_planner_reply(tasks_mod, origin: Optional[str], default_mode: Optional[str], buffer_min: int = DEFAULT_BUFFER_MIN) -> str:
+    lines = [f"PREDICTIVE PLANNER — {_today_iso()}", ""]
+    try:
+        lines.append(daily_next_step(tasks_mod, origin, default_mode, buffer_min=buffer_min))
+    except Exception:
+        pass
+    try:
+        lines.extend(["", suggest_for_current_window(tasks_mod, origin, default_mode, buffer_min=buffer_min)])
+    except Exception:
+        pass
+    try:
+        lines.extend(["", memory_patterns_reply(tasks_mod)])
+    except Exception:
+        pass
+    return "\n".join([line for line in lines if line is not None])
+
+def inbox_intelligence_reply() -> str:
+    try:
+        from app.b2c import inbox as inbox_mod
+        data = inbox_mod.list_inbox()
+        items = data if isinstance(data, list) else data.get("items", [])
+    except Exception:
+        items = []
+
+    if not items:
+        return "INBOX INTELLIGENCE\n\nInbox jest pusty albo nie mam jeszcze czego przeanalizować."
+
+    lines = ["INBOX INTELLIGENCE", "", "Potencjalne taski z inboxa:"]
+    count = 0
+    for item in items[:10]:
+        text = str(item.get("text") or item.get("title") or "").strip()
+        low = text.lower()
+        if any(k in low for k in ["zadzwo", "napisz", "umów", "umow", "kup", "przygotuj", "wyślij", "wyslij", "oddaj", "sprawdź", "sprawdz"]):
+            lines.append(f"• {text}")
+            count += 1
+    if count == 0:
+        lines.append("• Nie widzę jeszcze wyraźnych zadań — wygląda bardziej na notatki i pomysły.")
+    return "\n".join(lines)
+
+def persist_today_patterns_reply(tasks_mod) -> str:
+    data = _update_persistent_brain(tasks_mod)
+    return f"Trwała pamięć zaktualizowana. Zapisane dni: {data.get('days_seen', 0)}."
+
+def persistent_brain_reply(tasks_mod) -> str:
+    data = _update_persistent_brain(tasks_mod)
+
+    lines = ["PERSISTENT BRAIN", ""]
+    lines.append(f"Zapamiętane dni: {data.get('days_seen', 0)}")
+
+    type_counts = data.get("task_type_counts", {})
+    if type_counts:
+        lines.extend(["", "Najczęstsze typy zadań między dniami:"])
+        for name, count in sorted(type_counts.items(), key=lambda kv: (-kv[1], kv[0]))[:5]:
+            lines.append(f"• {name}: {count}")
+
+    dur = data.get("duration_profile", {})
+    lines.extend(["", "Profil bloków między dniami:"])
+    lines.append(f"• krótkie: {int(dur.get('short', 0))}")
+    lines.append(f"• średnie: {int(dur.get('medium', 0))}")
+    lines.append(f"• długie: {int(dur.get('long', 0))}")
+
+    tod = data.get("time_of_day", {})
+    lines.extend(["", "Rytm dnia między dniami:"])
+    lines.append(f"• rano: {int(tod.get('morning', 0))}")
+    lines.append(f"• popołudnie: {int(tod.get('afternoon', 0))}")
+    lines.append(f"• wieczór: {int(tod.get('evening', 0))}")
+
+    dominant = max([("rano", int(tod.get("morning", 0))), ("po południu", int(tod.get("afternoon", 0))), ("wieczorem", int(tod.get("evening", 0)))], key=lambda x: x[1])[0]
+    lines.extend(["", f"Wniosek: najwięcej rzeczy zwykle dzieje się {dominant}."])
     return "\n".join(lines)
