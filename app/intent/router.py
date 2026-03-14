@@ -780,15 +780,9 @@ def route_intent(message: str, persona: str = "b2c", mode: Optional[str] = None,
     if low in {
         "co powinienem zrobić teraz", "co powinienem zrobic teraz",
         "co mam zrobić teraz", "co mam zrobic teraz",
-        "co teraz", "co robić teraz", "co robic teraz",
-        "co teraz robić", "co teraz robic",
-        "autopilot", "autopilot teraz"
+        "co teraz", "co robić teraz", "co robic teraz"
     }:
-        try:
-            from app.b2c.context_ai import daily_next_step
-            return _as_reply("planner_now", daily_next_step(tasks_mod, _get_origin_address(), _get_place("travel_mode_default") or "samochod", buffer_min=TRAVEL_BUFFER_MIN))
-        except Exception:
-            return _as_reply("planner_now", _brain_now_reply(_brain_today_tasks()))
+        return _as_reply("brain_now", _brain_now_reply(_brain_today_tasks()))
 
     if low in {"następne zadanie", "nastepne zadanie", "co dalej", "następny krok", "nastepny krok"}:
         return _as_reply("brain_next", _brain_next_reply(_brain_today_tasks()))
@@ -821,7 +815,7 @@ def route_intent(message: str, persona: str = "b2c", mode: Optional[str] = None,
         except Exception:
             return _as_reply("context_postpone", "Nie mogę teraz przełożyć mniej ważnych zadań.")
 
-    if low in {"zaplanuj mi dzień automatycznie", "zaplanuj mi dzien automatycznie", "ułóż mi dzień automatycznie", "uloz mi dzien automatycznie", "autoplan dnia", "zaplanuj dzień automatycznie", "zaplanuj dzien automatycznie", "autoplan"}:
+    if low in {"zaplanuj mi dzień automatycznie", "zaplanuj mi dzien automatycznie", "ułóż mi dzień automatycznie", "uloz mi dzien automatycznie", "autoplan dnia"}:
         try:
             from app.b2c.context_ai import auto_plan_day
             return _as_reply("context_autoplan", auto_plan_day(tasks_mod, _get_origin_address(), _get_place("travel_mode_default") or "samochod", buffer_min=TRAVEL_BUFFER_MIN))
@@ -1819,6 +1813,68 @@ def route_intent(message: str, persona: str = "b2c", mode: Optional[str] = None,
     
         return _as_reply("add_task", _reply_from_any(out))
     
+
+    if low in {"przygotuj mój dzień", "przygotuj moj dzien", "briefing dnia", "monitor dnia", "co za chwilę", "co za chwile"}:
+        try:
+            from app.b2c.v24_brain import proactive_day_brief
+            return _as_reply("v24_focus_brief", proactive_day_brief(tasks_mod, _get_origin_address(), _get_place("travel_mode_default") or "samochod", buffer_min=TRAVEL_BUFFER_MIN))
+        except Exception:
+            return _as_reply("v24_focus_brief", "Nie mogę teraz przygotować proaktywnego briefingu dnia.")
+
+    if low in {"czy mam już wyjść", "czy mam juz wyjsc", "czy powinnam już wyjść", "czy powinnam juz wyjsc", "proaktywne przypomnienie", "co za chwilę mam zrobić", "co za chwile mam zrobic"}:
+        try:
+            from app.b2c.v24_brain import leave_check
+            return _as_reply("v24_leave_check", leave_check(tasks_mod, _get_origin_address(), _get_place("travel_mode_default") or "samochod", buffer_min=TRAVEL_BUFFER_MIN))
+        except Exception:
+            return _as_reply("v24_leave_check", "Nie mogę teraz sprawdzić, czy już trzeba wychodzić.")
+
+    if low in {"inbox brain", "co w inboxie", "przegląd inboxa", "przeglad inboxa", "przejrzyj inbox", "inbox briefing"}:
+        try:
+            from app.b2c.v24_brain import inbox_brain_summary
+            return _as_reply("v24_inbox_brain", inbox_brain_summary(tasks_mod))
+        except Exception:
+            return _as_reply("v24_inbox_brain", "Nie mogę teraz przygotować przeglądu inboxa.")
+
+    if low in {"co robić z inboxem", "co robic z inboxem", "następny krok w inboxie", "nastepny krok w inboxie"}:
+        try:
+            from app.b2c.v24_brain import inbox_brain_next
+            return _as_reply("v24_inbox_next", inbox_brain_next(tasks_mod))
+        except Exception:
+            return _as_reply("v24_inbox_next", "Nie mogę teraz podpowiedzieć kolejnego kroku dla inboxa.")
+
+    # =============================
+    # FOCUS LOOP v25
+    # =============================
+    m_focus_start = re.match(r"^(?:zacznij(?:\s+zadanie)?|start(?:\s+fokusu)?|focus start)(?:\s+(\d+))?$", low)
+    if m_focus_start:
+        try:
+            from app.b2c.v25_brain import start_focus
+            task_id = int(m_focus_start.group(1)) if m_focus_start.group(1) else None
+            return _as_reply("v25_focus_start", start_focus(tasks_mod, task_id))
+        except Exception:
+            return _as_reply("v25_focus_start", "Nie mogę teraz uruchomić fokusu.")
+
+    if low in {"ile zostało czasu", "ile zostalo czasu", "status fokusu", "status focus", "focus status"}:
+        try:
+            from app.b2c.v25_brain import focus_status
+            return _as_reply("v25_focus_status", focus_status())
+        except Exception:
+            return _as_reply("v25_focus_status", "Nie mogę teraz sprawdzić statusu fokusu.")
+
+    if low in {"skończyłem", "skonczylem", "koniec fokusu", "finish focus", "focus done"}:
+        try:
+            from app.b2c.v25_brain import finish_focus
+            return _as_reply("v25_focus_done", finish_focus(tasks_mod))
+        except Exception:
+            return _as_reply("v25_focus_done", "Nie mogę teraz zakończyć fokusu.")
+
+    if low in {"anuluj fokus", "cancel focus", "przerwij fokus", "stop focus"}:
+        try:
+            from app.b2c.v25_brain import cancel_focus
+            return _as_reply("v25_focus_cancel", cancel_focus())
+        except Exception:
+            return _as_reply("v25_focus_cancel", "Nie mogę teraz anulować fokusu.")
+
     # =============================
     # =============================
     # MORNING (no questions; just overview + refresh ETA cache)

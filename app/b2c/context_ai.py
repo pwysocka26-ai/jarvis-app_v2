@@ -252,7 +252,7 @@ def suggest_for_free_time(tasks_mod) -> str:
 
     biggest = max(free, key=lambda w: w[1] - w[0])
     gap = biggest[1] - biggest[0]
-    lines = [f"Największe wolne okno dziś: **{_fmt_hhmm(biggest[0])}–{_fmt_hhmm(biggest[1])}** ({gap} min)."]
+    lines = [f"Największe wolne okno dziś: {_fmt_hhmm(biggest[0])}–{_fmt_hhmm(biggest[1])} ({gap} min)."]
     if untimed:
         fit = [t for t in untimed if _duration_min(t) <= gap + 10]
         if fit:
@@ -320,11 +320,26 @@ def auto_plan_day(tasks_mod, origin: Optional[str], default_mode: Optional[str],
     else:
         lines.append("Nie masz dziś jeszcze stałych punktów z godziną.")
 
-    windows = _free_windows(timed) if timed else [(9 * 60, 18 * 60)]
+    now = datetime.now()
+    now_min = now.hour * 60 + now.minute
+
+    base_windows = _free_windows(timed) if timed else [(9 * 60, 18 * 60)]
+    future_windows: List[Tuple[int, int]] = []
+    for start_w, end_w in base_windows:
+        start_eff = max(start_w, now_min)
+        if end_w - start_eff >= 20:
+            future_windows.append((start_eff, end_w))
+
+    windows = future_windows or base_windows
+
     if untimed:
         proposed: List[str] = []
         remaining = untimed[:]
-        for start_w, end_w in windows:
+
+        # Fill the largest future windows first, not the earliest day window.
+        ordered_windows = sorted(windows, key=lambda w: (-(w[1] - w[0]), w[0]))
+
+        for start_w, end_w in ordered_windows:
             cur = start_w
             idx = 0
             while idx < len(remaining):
@@ -336,6 +351,7 @@ def auto_plan_day(tasks_mod, origin: Optional[str], default_mode: Optional[str],
                     remaining.pop(idx)
                 else:
                     idx += 1
+
         if proposed:
             lines.extend(["", "Proponuję wypełnić wolne okna tak:"])
             lines.extend(proposed)
@@ -472,11 +488,11 @@ def prepare_for_next_task(tasks_mod, origin: Optional[str], default_mode: Option
     mode = task.get('travel_mode') or default_mode or 'samochod'
     eta = _eta_minutes(origin, loc, mode) if origin and loc else 0
     leave = start_min - eta - buffer_min if eta else None
-    lines = [f"Następne zadanie: {due} {title}", f"Za: {status}"]
+    lines = [f"Następne zadanie: **{due} {title}**", f"Za: {status}"]
     if loc:
         lines.append(f"Miejsce: {loc}")
     if eta and leave is not None and status not in {"jutro", "to był ostatni dzisiejszy punkt"}:
-        lines.append(f"Wyjdź około {_fmt_hhmm(leave)} • ETA: {eta} min • Tryb: {_display_mode(mode)}")
+        lines.append(f"Wyjdź około **{_fmt_hhmm(leave)}** • ETA: {eta} min • Tryb: {_display_mode(mode)}")
 
     checklist = task.get('checklist')
     if isinstance(checklist, dict) and isinstance(checklist.get('items'), list) and checklist['items']:
@@ -614,7 +630,7 @@ def daily_next_step(tasks_mod, origin: Optional[str], default_mode: Optional[str
                 if fit:
                     task = fit[0]
                     return (
-                        f"Masz jeszcze około **{slack} min** do momentu wyjścia na **{title}**.\n"
+                        f"Masz jeszcze około {slack} min do momentu wyjścia na {title}.\n"
                         f"Najlepszy następny krok: {_task_title(task)} (~{_duration_min(task)} min, p{_priority(task)})."
                     )
             return prepare_for_next_task(tasks_mod, origin, default_mode, buffer_min=buffer_min)
