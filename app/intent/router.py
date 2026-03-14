@@ -780,9 +780,15 @@ def route_intent(message: str, persona: str = "b2c", mode: Optional[str] = None,
     if low in {
         "co powinienem zrobić teraz", "co powinienem zrobic teraz",
         "co mam zrobić teraz", "co mam zrobic teraz",
-        "co teraz", "co robić teraz", "co robic teraz"
+        "co teraz", "co robić teraz", "co robic teraz",
+        "co teraz robić", "co teraz robic",
+        "autopilot", "autopilot teraz"
     }:
-        return _as_reply("brain_now", _brain_now_reply(_brain_today_tasks()))
+        try:
+            from app.b2c.context_ai import daily_next_step
+            return _as_reply("planner_now", daily_next_step(tasks_mod, _get_origin_address(), _get_place("travel_mode_default") or "samochod", buffer_min=TRAVEL_BUFFER_MIN))
+        except Exception:
+            return _as_reply("planner_now", _brain_now_reply(_brain_today_tasks()))
 
     if low in {"następne zadanie", "nastepne zadanie", "co dalej", "następny krok", "nastepny krok"}:
         return _as_reply("brain_next", _brain_next_reply(_brain_today_tasks()))
@@ -815,7 +821,7 @@ def route_intent(message: str, persona: str = "b2c", mode: Optional[str] = None,
         except Exception:
             return _as_reply("context_postpone", "Nie mogę teraz przełożyć mniej ważnych zadań.")
 
-    if low in {"zaplanuj mi dzień automatycznie", "zaplanuj mi dzien automatycznie", "ułóż mi dzień automatycznie", "uloz mi dzien automatycznie", "autoplan dnia"}:
+    if low in {"zaplanuj mi dzień automatycznie", "zaplanuj mi dzien automatycznie", "ułóż mi dzień automatycznie", "uloz mi dzien automatycznie", "autoplan dnia", "zaplanuj dzień automatycznie", "zaplanuj dzien automatycznie", "autoplan"}:
         try:
             from app.b2c.context_ai import auto_plan_day
             return _as_reply("context_autoplan", auto_plan_day(tasks_mod, _get_origin_address(), _get_place("travel_mode_default") or "samochod", buffer_min=TRAVEL_BUFFER_MIN))
@@ -1039,26 +1045,6 @@ def route_intent(message: str, persona: str = "b2c", mode: Optional[str] = None,
     # =============================
     # SMART PLAN / V10
     # =============================
-    if low in {"zaplanuj dzień automatycznie", "zaplanuj dzien automatycznie", "zaplanuj mi dzień automatycznie", "zaplanuj mi dzien automatycznie", "zaplanuj cały mój dzień", "zaplanuj caly moj dzien", "autoplan"}:
-        try:
-            from app.b2c import context_ai
-            origin_addr = _get_origin_address()
-            transport_default = _get_place("travel_mode_default") or "samochod"
-            plan = context_ai.plan_whole_day(tasks_mod, origin_addr, transport_default, buffer_min=TRAVEL_BUFFER_MIN)
-            return _as_reply("autoplan", plan)
-        except Exception:
-            return _as_reply("autoplan", "Nie mogę teraz zaplanować całego dnia.")
-
-    if low in {"co teraz robić", "co teraz robic", "autopilot", "autopilot teraz", "autopilot dnia"}:
-        try:
-            from app.b2c import context_ai
-            origin_addr = _get_origin_address()
-            transport_default = _get_place("travel_mode_default") or "samochod"
-            plan = context_ai.autopilot_now(tasks_mod, origin_addr, transport_default, buffer_min=TRAVEL_BUFFER_MIN)
-            return _as_reply("autopilot_now", plan)
-        except Exception:
-            return _as_reply("autopilot_now", "Nie mogę teraz uruchomić autopilota.")
-
     if low in {"ułóż dzień", "uloz dzien", "ułoz dzien", "ułóż dzien"}:
         try:
             from app.b2c.smart_plan import build_smart_day_plan
