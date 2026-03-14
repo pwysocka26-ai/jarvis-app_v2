@@ -1843,37 +1843,78 @@ def route_intent(message: str, persona: str = "b2c", mode: Optional[str] = None,
             return _as_reply("v24_inbox_next", "Nie mogę teraz podpowiedzieć kolejnego kroku dla inboxa.")
 
     # =============================
-    # FOCUS LOOP v25
+    # CONTEXT BRAIN v26
     # =============================
-    m_focus_start = re.match(r"^(?:zacznij(?:\s+zadanie)?|start(?:\s+fokusu)?|focus start)(?:\s+(\d+))?$", low)
-    if m_focus_start:
+    m_ctx_minutes = re.match(r"^(?:mam|zostało mi|zostalo mi|mam jeszcze)\s+(\d{1,3})\s+min(?:ut(?:y)?)?$", low)
+    if m_ctx_minutes:
         try:
-            from app.b2c.v25_brain import start_focus
-            task_id = int(m_focus_start.group(1)) if m_focus_start.group(1) else None
-            return _as_reply("v25_focus_start", start_focus(tasks_mod, task_id))
+            from app.b2c.v26_brain import set_context
+            return _as_reply("v26_set_minutes", set_context("available_minutes", int(m_ctx_minutes.group(1))))
         except Exception:
-            return _as_reply("v25_focus_start", "Nie mogę teraz uruchomić fokusu.")
+            return _as_reply("v26_set_minutes", "Nie mogę teraz ustawić dostępnego czasu.")
 
-    if low in {"ile zostało czasu", "ile zostalo czasu", "status fokusu", "status focus", "focus status"}:
+    if low in {"jestem w domu", "pracuję z domu", "praca z domu"}:
         try:
-            from app.b2c.v25_brain import focus_status
-            return _as_reply("v25_focus_status", focus_status())
+            from app.b2c.v26_brain import set_context
+            return _as_reply("v26_set_place", set_context("place", "dom"))
         except Exception:
-            return _as_reply("v25_focus_status", "Nie mogę teraz sprawdzić statusu fokusu.")
+            return _as_reply("v26_set_place", "Nie mogę teraz ustawić miejsca.")
 
-    if low in {"skończyłem", "skonczylem", "koniec fokusu", "finish focus", "focus done"}:
+    if low in {"jestem w pracy", "pracuję", "pracuje"}:
         try:
-            from app.b2c.v25_brain import finish_focus
-            return _as_reply("v25_focus_done", finish_focus(tasks_mod))
+            from app.b2c.v26_brain import set_context
+            return _as_reply("v26_set_place", set_context("place", "praca"))
         except Exception:
-            return _as_reply("v25_focus_done", "Nie mogę teraz zakończyć fokusu.")
+            return _as_reply("v26_set_place", "Nie mogę teraz ustawić miejsca.")
 
-    if low in {"anuluj fokus", "cancel focus", "przerwij fokus", "stop focus"}:
+    if low in {"jestem w drodze", "w drodze"}:
         try:
-            from app.b2c.v25_brain import cancel_focus
-            return _as_reply("v25_focus_cancel", cancel_focus())
+            from app.b2c.v26_brain import set_context
+            return _as_reply("v26_set_state", set_context("state", "w drodze"))
         except Exception:
-            return _as_reply("v25_focus_cancel", "Nie mogę teraz anulować fokusu.")
+            return _as_reply("v26_set_state", "Nie mogę teraz ustawić stanu.")
+
+    if low in {"tryb focus", "deep work", "tryb deep work"}:
+        try:
+            from app.b2c.v26_brain import set_context
+            return _as_reply("v26_set_mode", set_context("mode", "focus"))
+        except Exception:
+            return _as_reply("v26_set_mode", "Nie mogę teraz ustawić trybu.")
+
+    if low in {"tryb admin", "admin"}:
+        try:
+            from app.b2c.v26_brain import set_context
+            return _as_reply("v26_set_mode", set_context("mode", "admin"))
+        except Exception:
+            return _as_reply("v26_set_mode", "Nie mogę teraz ustawić trybu.")
+
+    if low in {"kontekst", "context", "context brain"}:
+        try:
+            from app.b2c.v26_brain import context_summary
+            return _as_reply("v26_summary", context_summary())
+        except Exception:
+            return _as_reply("v26_summary", "Nie mogę teraz pokazać kontekstu.")
+
+    if low in {"wyczyść kontekst", "wyczysc kontekst", "reset kontekstu"}:
+        try:
+            from app.b2c.v26_brain import clear_context
+            return _as_reply("v26_clear", clear_context())
+        except Exception:
+            return _as_reply("v26_clear", "Nie mogę teraz wyczyścić kontekstu.")
+
+    if low in {"mam 10 minut", "mam dziesięć minut", "mam dziesiec minut", "mam chwilę", "mam chwile", "co mogę zrobić teraz", "co moge zrobic teraz", "co pasuje do mojego kontekstu"}:
+        try:
+            from app.b2c.v26_brain import suggest_by_context
+            return _as_reply("v26_suggest", suggest_by_context(tasks_mod))
+        except Exception:
+            return _as_reply("v26_suggest", "Nie mogę teraz dobrać zadania do kontekstu.")
+
+    if low in {"jakie mam opcje", "jakie opcje", "co mogę zrobić w 10 minut", "co moge zrobic w 10 minut"}:
+        try:
+            from app.b2c.v26_brain import quick_options
+            return _as_reply("v26_options", quick_options(tasks_mod))
+        except Exception:
+            return _as_reply("v26_options", "Nie mogę teraz przygotować krótkich opcji.")
 
     # =============================
     # =============================
