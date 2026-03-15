@@ -757,6 +757,14 @@ def route_intent(message: str, persona: str = "b2c", mode: Optional[str] = None,
     low = (message or "").strip().lower()
 
     try:
+        from app.b2c.v34_brain import maybe_handle_event_nlp
+        event_out = maybe_handle_event_nlp(message)
+        if event_out:
+            return _as_reply(str(event_out.get("intent") or "event_add"), str(event_out.get("reply") or "OK"))
+    except Exception:
+        pass
+
+    try:
         from app.b2c.v30_brain import maybe_handle_conversational
         conv = maybe_handle_conversational(message, tasks_mod)
         if conv:
@@ -2065,105 +2073,37 @@ def route_intent(message: str, persona: str = "b2c", mode: Optional[str] = None,
             return _as_reply("v29_command_center", "Nie mogę teraz otworzyć centrum dowodzenia.")
 
     # =============================
-    # PERSONAL MEMORY BRAIN v31
+    # EVENT BRAIN v34
     # =============================
-    if low.startswith("zapamiętaj że ") or low.startswith("zapamietaj ze "):
+    if low in {"event brain", "wydarzenia", "jakie mam wydarzenia", "pokaż wydarzenia", "pokaz wydarzenia"}:
         try:
-            from app.b2c.v31_brain import remember_fact
-            fact = message.split(" ", 2)[2].strip()
-            if fact.lower().startswith("że "):
-                fact = fact[3:]
-            if fact.lower().startswith("ze "):
-                fact = fact[3:]
-            return _as_reply("v31_remember", remember_fact(fact))
+            from app.b2c.v34_brain import event_brain_summary
+            return _as_reply("v34_events", event_brain_summary())
         except Exception:
-            return _as_reply("v31_remember", "Nie mogę teraz tego zapamiętać.")
+            return _as_reply("v34_events", "Nie mogę teraz pokazać wydarzeń.")
 
-    if low.startswith("zapamiętaj:") or low.startswith("zapamietaj:"):
+    if low in {"wydarzenia dnia", "co mam dziś w kalendarzu", "co mam dzis w kalendarzu", "co dziś mam", "co dzis mam"}:
         try:
-            from app.b2c.v31_brain import remember_fact
-            fact = message.split(":", 1)[1].strip()
-            return _as_reply("v31_remember", remember_fact(fact))
+            from app.b2c.v34_brain import today_events
+            return _as_reply("v34_today_events", today_events())
         except Exception:
-            return _as_reply("v31_remember", "Nie mogę teraz tego zapamiętać.")
-
-    if low in {"co o mnie wiesz", "co o mnie pamiętasz", "co o mnie pamietasz", "co pamiętasz o mnie", "co pamietasz o mnie"}:
-        try:
-            from app.b2c.v31_brain import recall_about_me
-            return _as_reply("v31_about_me", recall_about_me())
-        except Exception:
-            return _as_reply("v31_about_me", "Nie mogę teraz odczytać pamięci osobistej.")
-
-    if low in {"memory brain v2", "personal memory", "personal memory brain", "pamięć osobista", "pamiec osobista"}:
-        try:
-            from app.b2c.v31_brain import memory_brief
-            return _as_reply("v31_memory_brief", memory_brief())
-        except Exception:
-            return _as_reply("v31_memory_brief", "Nie mogę teraz pokazać pamięci osobistej.")
-
-    if low.startswith("pamiętasz że ") or low.startswith("pamietasz ze "):
-        try:
-            from app.b2c.v31_brain import recall_match
-            fact = message.split(" ", 1)[1].strip()
-            if fact.lower().startswith("że "):
-                fact = fact[3:]
-            if fact.lower().startswith("ze "):
-                fact = fact[3:]
-            return _as_reply("v31_recall_match", recall_match(fact))
-        except Exception:
-            return _as_reply("v31_recall_match", "Nie mogę teraz przeszukać pamięci osobistej.")
-
-    if low.startswith("zapomnij ") or low.startswith("usuń z pamięci ") or low.startswith("usun z pamieci "):
-        try:
-            from app.b2c.v31_brain import forget_fact
-            fact = message.split(" ", 1)[1].strip()
-            if fact.lower().startswith("z pamięci "):
-                fact = fact[10:]
-            if fact.lower().startswith("z pamieci "):
-                fact = fact[10:]
-            return _as_reply("v31_forget", forget_fact(fact))
-        except Exception:
-            return _as_reply("v31_forget", "Nie mogę teraz usunąć tego z pamięci.")
+            return _as_reply("v34_today_events", "Nie mogę teraz pokazać wydarzeń dnia.")
 
     # =============================
-    # COGNITIVE BRAIN v32
+    # CALENDAR BRAIN v36
     # =============================
-    if low in {"cognitive brain", "cognitive", "mózg poznawczy", "mozg poznawczy", "profil poznawczy"}:
+    if low in {"calendar brain", "kalendarz dnia", "calendar", "plan kalendarza"}:
         try:
-            from app.b2c.v32_brain import cognitive_brief
-            return _as_reply("v32_cognitive_brief", cognitive_brief())
+            from app.b2c.v36_brain import calendar_brain
+            return _as_reply("v36_calendar", calendar_brain(tasks_mod, _get_origin_address(), _get_place("travel_mode_default") or "samochod", day_offset=0))
         except Exception:
-            return _as_reply("v32_cognitive_brief", "Nie mogę teraz pokazać profilu poznawczego.")
+            return _as_reply("v36_calendar", "Nie mogę teraz zbudować kalendarza dnia.")
 
-    if low in {"zaplanuj dzień z pamięcią", "zaplanuj dzien z pamiecia", "zaplanuj dzień poznawczo", "zaplanuj dzien poznawczo", "plan poznawczy"}:
+    if low in {"kalendarz jutra", "calendar tomorrow", "jutrzejszy kalendarz"}:
         try:
-            from app.b2c.v32_brain import cognitive_day_plan
-            return _as_reply("v32_cognitive_plan", cognitive_day_plan(tasks_mod, _get_origin_address(), _get_place("travel_mode_default") or "samochod", buffer_min=TRAVEL_BUFFER_MIN))
+            from app.b2c.v36_brain import calendar_brain
+            return _as_reply("v36_calendar_tomorrow", calendar_brain(tasks_mod, _get_origin_address(), _get_place("travel_mode_default") or "samochod", day_offset=1))
         except Exception:
-            return _as_reply("v32_cognitive_plan", "Nie mogę teraz przygotować planu poznawczego.")
-
-    if low in {"co powinienem zrobić z pamięcią", "co powinnam zrobić z pamięcią", "następny krok z pamięcią", "nastepny krok z pamiecia"}:
-        try:
-            from app.b2c.v32_brain import cognitive_next_step
-            return _as_reply("v32_cognitive_next", cognitive_next_step(tasks_mod, _get_origin_address(), _get_place("travel_mode_default") or "samochod", buffer_min=TRAVEL_BUFFER_MIN))
-        except Exception:
-            return _as_reply("v32_cognitive_next", "Nie mogę teraz wskazać kolejnego kroku z pamięcią.")
-
-    # =============================
-    # AUTONOMOUS BRAIN v33
-    # =============================
-    if low in {"autonomous brain", "autonomous", "mózg autonomiczny", "mozg autonomiczny", "autonomiczny mózg", "autonomiczny mozg"}:
-        try:
-            from app.b2c.v33_brain import autonomous_brain
-            return _as_reply("v33_autonomous", autonomous_brain(tasks_mod))
-        except Exception:
-            return _as_reply("v33_autonomous", "Nie mogę teraz uruchomić Autonomous Brain.")
-
-    if low in {"co sugerujesz proaktywnie", "co sugerujesz", "proaktywna sugestia", "co jarvis sugeruje teraz"}:
-        try:
-            from app.b2c.v33_brain import proactive_prompt
-            return _as_reply("v33_proactive", proactive_prompt(tasks_mod))
-        except Exception:
-            return _as_reply("v33_proactive", "Nie mogę teraz przygotować proaktywnej sugestii.")
+            return _as_reply("v36_calendar_tomorrow", "Nie mogę teraz zbudować kalendarza jutra.")
 
     return _as_reply("unknown", "Nie mam jeszcze tej komendy. Spróbuj: `lista`, `dodaj: ...`, `usuń ...`, `priorytet ...`.")
