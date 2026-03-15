@@ -1,3 +1,4 @@
+
 from __future__ import annotations
 
 import json
@@ -159,13 +160,32 @@ def finish_focus(tasks_mod) -> str:
         return "Nie masz teraz aktywnego fokusu."
     task_id = int(state.get("task_id") or 0)
     title = str(state.get("title") or "zadanie")
+    started_at = str(state.get("started_at") or "")
+    planned = int(state.get("duration_min") or 30)
+    try:
+        started = datetime.fromisoformat(started_at)
+        actual = max(1, int((datetime.now() - started).total_seconds() // 60))
+    except Exception:
+        actual = planned
+
     try:
         if hasattr(tasks_mod, "update_task"):
             tasks_mod.update_task(task_id, done=True)
     except Exception:
         pass
+
+    learn_msg = None
+    try:
+        from app.b2c.v27_brain import log_focus_result
+        learn_msg = log_focus_result(title, planned, actual, completed=True, started_at=started_at)
+    except Exception:
+        learn_msg = None
+
     _clear_state()
-    return f"✅ Zakończono fokus i oznaczono jako zrobione: {title}"
+    base = f"✅ Zakończono fokus i oznaczono jako zrobione: {title}"
+    if learn_msg:
+        return base + "\n" + learn_msg
+    return base
 
 
 def cancel_focus() -> str:
@@ -173,5 +193,23 @@ def cancel_focus() -> str:
     if not state or not state.get("active"):
         return "Nie masz teraz aktywnego fokusu."
     title = str(state.get("title") or "zadanie")
+    started_at = str(state.get("started_at") or "")
+    planned = int(state.get("duration_min") or 30)
+    try:
+        started = datetime.fromisoformat(started_at)
+        actual = max(1, int((datetime.now() - started).total_seconds() // 60))
+    except Exception:
+        actual = 0
+
+    learn_msg = None
+    try:
+        from app.b2c.v27_brain import log_focus_result
+        learn_msg = log_focus_result(title, planned, actual, completed=False, started_at=started_at)
+    except Exception:
+        learn_msg = None
+
     _clear_state()
-    return f"🛑 Anulowano fokus: {title}"
+    base = f"🛑 Anulowano fokus: {title}"
+    if learn_msg:
+        return base + "\n" + learn_msg
+    return base
