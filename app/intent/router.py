@@ -2106,4 +2106,279 @@ def route_intent(message: str, persona: str = "b2c", mode: Optional[str] = None,
         except Exception:
             return _as_reply("v36_calendar_tomorrow", "Nie mogę teraz zbudować kalendarza jutra.")
 
+    # =============================
+    # CONFLICT RESOLVER v36.1
+    # =============================
+    if low in {"rozwiąż konflikt", "rozwiaz konflikt", "conflict resolver", "pokaż konflikt", "pokaz konflikt"}:
+        try:
+            from app.b2c.v36_1_brain import conflict_resolver
+            return _as_reply("v36_1_conflict", conflict_resolver())
+        except Exception:
+            return _as_reply("v36_1_conflict", "Nie mogę teraz pokazać konfliktu.")
+
+    if low in {"zachowaj nowe", "keep new"}:
+        try:
+            from app.b2c.v36_1_brain import keep_new
+            return _as_reply("v36_1_keep_new", keep_new())
+        except Exception:
+            return _as_reply("v36_1_keep_new", "Nie mogę teraz zachować nowego wydarzenia.")
+
+    if low in {"zachowaj stare", "keep old"}:
+        try:
+            from app.b2c.v36_1_brain import keep_old
+            return _as_reply("v36_1_keep_old", keep_old())
+        except Exception:
+            return _as_reply("v36_1_keep_old", "Nie mogę teraz usunąć nowego wydarzenia.")
+
+    m_conf_move = re.match(r"^przesuń nowe na\s+(\d{1,2}:\d{2})$", low)
+    if not m_conf_move:
+        m_conf_move = re.match(r"^przesun nowe na\s+(\d{1,2}:\d{2})$", low)
+    if m_conf_move:
+        try:
+            from app.b2c.v36_1_brain import move_new
+            return _as_reply("v36_1_move_new", move_new(m_conf_move.group(1)))
+        except Exception:
+            return _as_reply("v36_1_move_new", "Nie mogę teraz przesunąć nowego wydarzenia.")
+
+    if low in {"wyczyść konflikt", "wyczysc konflikt"}:
+        try:
+            from app.b2c.v36_1_brain import clear_conflict
+            clear_conflict()
+            return _as_reply("v36_1_clear_conflict", "🧹 Wyczyściłam aktywny konflikt.")
+        except Exception:
+            return _as_reply("v36_1_clear_conflict", "Nie mogę teraz wyczyścić konfliktu.")
+
+    # =============================
+    # SMART DEDUP v36.2
+    # =============================
+    if low in {"smart dedup", "dedup wydarzeń", "dedup wydarzen", "scal duplikaty wydarzeń", "scal duplikaty wydarzen"}:
+        try:
+            from app.b2c.v34_brain import smart_dedup_events
+            return _as_reply("v36_2_smart_dedup", smart_dedup_events())
+        except Exception:
+            return _as_reply("v36_2_smart_dedup", "Nie mogę teraz wykonać smart dedup.")
+
+    # =============================
+    # TRUE DAILY PLANNER v37
+    # =============================
+    if low in {"true daily planner", "plan dnia", "daily planner", "prawdziwy plan dnia"}:
+        try:
+            from app.b2c.v36_brain import true_daily_planner
+            return _as_reply("v37_true_daily_planner", true_daily_planner(tasks_mod, _get_origin_address(), _get_place("travel_mode_default") or "samochod", day_offset=0))
+        except Exception:
+            return _as_reply("v37_true_daily_planner", "Nie mogę teraz zbudować prawdziwego planu dnia.")
+
+    if low in {"plan jutra", "true daily planner jutro", "prawdziwy plan jutra"}:
+        try:
+            from app.b2c.v36_brain import true_daily_planner
+            return _as_reply("v37_true_daily_planner_tomorrow", true_daily_planner(tasks_mod, _get_origin_address(), _get_place("travel_mode_default") or "samochod", day_offset=1))
+        except Exception:
+            return _as_reply("v37_true_daily_planner_tomorrow", "Nie mogę teraz zbudować planu jutra.")
+
+    # =============================
+    # SCHEDULER AI v38
+    # =============================
+    if low in {"scheduler ai", "ai scheduler", "napraw plan", "napraw harmonogram"}:
+        try:
+            from app.b2c.v38_brain import scheduler_ai
+            return _as_reply("v38_scheduler_ai", scheduler_ai(tasks_mod, day_offset=0))
+        except Exception:
+            return _as_reply("v38_scheduler_ai", "Nie mogę teraz przeanalizować planu.")
+
+    if low in {"scheduler ai jutra", "scheduler ai jutro", "napraw plan jutra", "napraw harmonogram jutra"}:
+        try:
+            from app.b2c.v38_brain import scheduler_ai
+            return _as_reply("v38_scheduler_ai_tomorrow", scheduler_ai(tasks_mod, day_offset=1))
+        except Exception:
+            return _as_reply("v38_scheduler_ai_tomorrow", "Nie mogę teraz przeanalizować planu jutra.")
+
+    if low in {"napraw plan dnia", "auto repair", "autonapraw plan"}:
+        try:
+            from app.b2c.v38_brain import auto_repair_plan
+            return _as_reply("v38_auto_repair", auto_repair_plan(tasks_mod, day_offset=0))
+        except Exception:
+            return _as_reply("v38_auto_repair", "Nie mogę teraz automatycznie naprawić planu dnia.")
+
+    if low in {"napraw plan jutra automatycznie", "autonapraw plan jutra"}:
+        try:
+            from app.b2c.v38_brain import auto_repair_plan
+            return _as_reply("v38_auto_repair_tomorrow", auto_repair_plan(tasks_mod, day_offset=1))
+        except Exception:
+            return _as_reply("v38_auto_repair_tomorrow", "Nie mogę teraz automatycznie naprawić planu jutra.")
+
+    # =============================
+    # TRAVEL SCHEDULER v39
+    # =============================
+    if low in {"travel scheduler", "plan dojazdów", "plan dojazdow", "logistyka dnia"}:
+        try:
+            from app.b2c.v39_brain import travel_scheduler
+            return _as_reply("v39_travel_scheduler", travel_scheduler(tasks_mod, _get_origin_address(), _get_place("travel_mode_default") or "samochod", day_offset=0, buffer_min=TRAVEL_BUFFER_MIN))
+        except Exception:
+            return _as_reply("v39_travel_scheduler", "Nie mogę teraz zbudować planu dojazdów.")
+
+    if low in {"travel scheduler jutro", "plan dojazdów jutra", "plan dojazdow jutra", "logistyka jutra"}:
+        try:
+            from app.b2c.v39_brain import travel_scheduler
+            return _as_reply("v39_travel_scheduler_tomorrow", travel_scheduler(tasks_mod, _get_origin_address(), _get_place("travel_mode_default") or "samochod", day_offset=1, buffer_min=TRAVEL_BUFFER_MIN))
+        except Exception:
+            return _as_reply("v39_travel_scheduler_tomorrow", "Nie mogę teraz zbudować planu dojazdów na jutro.")
+
+    if low in {"napraw logistykę dnia", "napraw logistyke dnia", "travel repair", "napraw dojazdy"}:
+        try:
+            from app.b2c.v39_brain import auto_repair_travel_plan
+            return _as_reply("v39_travel_repair", auto_repair_travel_plan(tasks_mod, _get_origin_address(), _get_place("travel_mode_default") or "samochod", day_offset=0, buffer_min=TRAVEL_BUFFER_MIN))
+        except Exception:
+            return _as_reply("v39_travel_repair", "Nie mogę teraz przeanalizować logistyki dnia.")
+
+    if low in {"napraw logistykę jutra", "napraw logistyke jutra", "napraw dojazdy jutra"}:
+        try:
+            from app.b2c.v39_brain import auto_repair_travel_plan
+            return _as_reply("v39_travel_repair_tomorrow", auto_repair_travel_plan(tasks_mod, _get_origin_address(), _get_place("travel_mode_default") or "samochod", day_offset=1, buffer_min=TRAVEL_BUFFER_MIN))
+        except Exception:
+            return _as_reply("v39_travel_repair_tomorrow", "Nie mogę teraz przeanalizować logistyki jutra.")
+
+    # =============================
+    # AUTO TRAVEL PLANNER v40
+    # =============================
+    if low in {"auto travel planner", "travel ai", "planner dojazdów", "planner dojazdow"}:
+        try:
+            from app.b2c.v40_brain import auto_travel_planner
+            return _as_reply("v40_auto_travel_planner", auto_travel_planner(tasks_mod, _get_origin_address(), _get_place("travel_mode_default") or "samochod", day_offset=0, buffer_min=TRAVEL_BUFFER_MIN))
+        except Exception:
+            return _as_reply("v40_auto_travel_planner", "Nie mogę teraz zbudować auto travel planera.")
+
+    if low in {"auto travel planner jutro", "travel ai jutro", "planner dojazdów jutra", "planner dojazdow jutra"}:
+        try:
+            from app.b2c.v40_brain import auto_travel_planner
+            return _as_reply("v40_auto_travel_planner_tomorrow", auto_travel_planner(tasks_mod, _get_origin_address(), _get_place("travel_mode_default") or "samochod", day_offset=1, buffer_min=TRAVEL_BUFFER_MIN))
+        except Exception:
+            return _as_reply("v40_auto_travel_planner_tomorrow", "Nie mogę teraz zbudować auto travel planera na jutro.")
+
+    if low in {"napraw logistykę jutra automatycznie", "napraw logistyke jutra automatycznie", "auto travel repair jutro"}:
+        try:
+            from app.b2c.v40_brain import auto_repair_travel_plan
+            return _as_reply("v40_auto_travel_repair_tomorrow", auto_repair_travel_plan(tasks_mod, _get_origin_address(), _get_place("travel_mode_default") or "samochod", day_offset=1, buffer_min=TRAVEL_BUFFER_MIN))
+        except Exception:
+            return _as_reply("v40_auto_travel_repair_tomorrow", "Nie mogę teraz automatycznie naprawić logistyki jutra.")
+
+    if low in {"napraw logistykę dnia automatycznie", "napraw logistyke dnia automatycznie", "auto travel repair"}:
+        try:
+            from app.b2c.v40_brain import auto_repair_travel_plan
+            return _as_reply("v40_auto_travel_repair", auto_repair_travel_plan(tasks_mod, _get_origin_address(), _get_place("travel_mode_default") or "samochod", day_offset=0, buffer_min=TRAVEL_BUFFER_MIN))
+        except Exception:
+            return _as_reply("v40_auto_travel_repair", "Nie mogę teraz automatycznie naprawić logistyki dnia.")
+
+    # =============================
+    # GLOBAL DAY OPTIMIZER v41
+    # =============================
+    if low in {"global day optimizer", "optymalizuj dzień", "optymalizuj dzien", "global optimizer"}:
+        try:
+            from app.b2c.v41_brain import global_day_optimizer
+            return _as_reply("v41_global_optimizer", global_day_optimizer(tasks_mod, _get_origin_address(), _get_place("travel_mode_default") or "samochod", day_offset=0, buffer_min=TRAVEL_BUFFER_MIN))
+        except Exception:
+            return _as_reply("v41_global_optimizer", "Nie mogę teraz przeanalizować całego dnia.")
+
+    if low in {"global day optimizer jutro", "optymalizuj jutro", "global optimizer jutro"}:
+        try:
+            from app.b2c.v41_brain import global_day_optimizer
+            return _as_reply("v41_global_optimizer_tomorrow", global_day_optimizer(tasks_mod, _get_origin_address(), _get_place("travel_mode_default") or "samochod", day_offset=1, buffer_min=TRAVEL_BUFFER_MIN))
+        except Exception:
+            return _as_reply("v41_global_optimizer_tomorrow", "Nie mogę teraz przeanalizować planu jutra.")
+
+    if low in {"optymalizuj jutro automatycznie", "napraw plan jutra globalnie", "apply global optimizer jutro"}:
+        try:
+            from app.b2c.v41_brain import apply_global_optimization
+            return _as_reply("v41_apply_global_optimizer_tomorrow", apply_global_optimization(tasks_mod, _get_origin_address(), _get_place("travel_mode_default") or "samochod", day_offset=1, buffer_min=TRAVEL_BUFFER_MIN))
+        except Exception:
+            return _as_reply("v41_apply_global_optimizer_tomorrow", "Nie mogę teraz automatycznie zoptymalizować jutra.")
+
+    if low in {"optymalizuj dzień automatycznie", "optymalizuj dzien automatycznie", "napraw plan dnia globalnie"}:
+        try:
+            from app.b2c.v41_brain import apply_global_optimization
+            return _as_reply("v41_apply_global_optimizer", apply_global_optimization(tasks_mod, _get_origin_address(), _get_place("travel_mode_default") or "samochod", day_offset=0, buffer_min=TRAVEL_BUFFER_MIN))
+        except Exception:
+            return _as_reply("v41_apply_global_optimizer", "Nie mogę teraz automatycznie zoptymalizować dnia.")
+
+    # =============================
+    # AI DAY REBUILDER v42
+    # =============================
+    if low in {"ai day rebuilder", "przebuduj dzień", "przebuduj dzien", "day rebuilder"}:
+        try:
+            from app.b2c.v42_brain import global_day_rebuilder
+            return _as_reply("v42_day_rebuilder", global_day_rebuilder(tasks_mod, _get_origin_address(), _get_place("travel_mode_default") or "samochod", day_offset=0))
+        except Exception:
+            return _as_reply("v42_day_rebuilder", "Nie mogę teraz przebudować dnia.")
+
+    if low in {"ai day rebuilder jutro", "przebuduj jutro", "day rebuilder jutro"}:
+        try:
+            from app.b2c.v42_brain import global_day_rebuilder
+            return _as_reply("v42_day_rebuilder_tomorrow", global_day_rebuilder(tasks_mod, _get_origin_address(), _get_place("travel_mode_default") or "samochod", day_offset=1))
+        except Exception:
+            return _as_reply("v42_day_rebuilder_tomorrow", "Nie mogę teraz przebudować jutra.")
+
+    if low in {"przebuduj jutro automatycznie", "apply day rebuild jutro", "ai rebuild jutra"}:
+        try:
+            from app.b2c.v42_brain import apply_day_rebuild
+            return _as_reply("v42_apply_day_rebuild_tomorrow", apply_day_rebuild(tasks_mod, _get_origin_address(), _get_place("travel_mode_default") or "samochod", day_offset=1))
+        except Exception:
+            return _as_reply("v42_apply_day_rebuild_tomorrow", "Nie mogę teraz automatycznie przebudować jutra.")
+
+    if low in {"przebuduj dzień automatycznie", "przebuduj dzien automatycznie", "apply day rebuild"}:
+        try:
+            from app.b2c.v42_brain import apply_day_rebuild
+            return _as_reply("v42_apply_day_rebuild", apply_day_rebuild(tasks_mod, _get_origin_address(), _get_place("travel_mode_default") or "samochod", day_offset=0))
+        except Exception:
+            return _as_reply("v42_apply_day_rebuild", "Nie mogę teraz automatycznie przebudować dnia.")
+
+    # =============================
+    # SMART TIME BLOCKS v43
+    # =============================
+    if low in {"smart time blocks", "bloki czasu", "time blocks", "smart blocks"}:
+        try:
+            from app.b2c.v43_brain import smart_time_blocks
+            return _as_reply("v43_time_blocks", smart_time_blocks(tasks_mod, day_offset=0))
+        except Exception:
+            return _as_reply("v43_time_blocks", "Nie mogę teraz zbudować bloków czasu.")
+
+    if low in {"smart time blocks jutro", "bloki jutra", "time blocks jutro", "smart blocks jutro"}:
+        try:
+            from app.b2c.v43_brain import smart_time_blocks
+            return _as_reply("v43_time_blocks_tomorrow", smart_time_blocks(tasks_mod, day_offset=1))
+        except Exception:
+            return _as_reply("v43_time_blocks_tomorrow", "Nie mogę teraz zbudować bloków jutra.")
+
+    # =============================
+    # AUTONOMOUS DAY MANAGER v44
+    # =============================
+    if low in {"autonomous day manager", "zaplanuj dzień", "zaplanuj dzien", "zaplanuj dziś", "zaplanuj dzis"}:
+        try:
+            from app.b2c.v44_brain import autonomous_day_manager
+            return _as_reply("v44_day_manager", autonomous_day_manager(tasks_mod, _get_origin_address(), _get_place("travel_mode_default") or "samochod", day_offset=0))
+        except Exception:
+            return _as_reply("v44_day_manager", "Nie mogę teraz autonomicznie zaplanować dnia.")
+
+    if low in {"autonomous day manager jutro", "zaplanuj jutro", "autonomous manager jutro"}:
+        try:
+            from app.b2c.v44_brain import autonomous_day_manager
+            return _as_reply("v44_day_manager_tomorrow", autonomous_day_manager(tasks_mod, _get_origin_address(), _get_place("travel_mode_default") or "samochod", day_offset=1))
+        except Exception:
+            return _as_reply("v44_day_manager_tomorrow", "Nie mogę teraz autonomicznie zaplanować jutra.")
+
+    # =============================
+    # CONTEXTUAL PRIORITIES v45
+    # =============================
+    if low in {"contextual priorities", "priorytety kontekstowe", "priorytety dnia", "context priorities"}:
+        try:
+            from app.b2c.v45_brain import contextual_priorities
+            return _as_reply("v45_contextual_priorities", contextual_priorities(tasks_mod, day_offset=0))
+        except Exception:
+            return _as_reply("v45_contextual_priorities", "Nie mogę teraz policzyć priorytetów kontekstowych.")
+
+    if low in {"contextual priorities jutro", "priorytety jutra", "context priorities jutro"}:
+        try:
+            from app.b2c.v45_brain import contextual_priorities
+            return _as_reply("v45_contextual_priorities_tomorrow", contextual_priorities(tasks_mod, day_offset=1))
+        except Exception:
+            return _as_reply("v45_contextual_priorities_tomorrow", "Nie mogę teraz policzyć priorytetów jutra.")
+
     return _as_reply("unknown", "Nie mam jeszcze tej komendy. Spróbuj: `lista`, `dodaj: ...`, `usuń ...`, `priorytet ...`.")

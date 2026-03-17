@@ -1,0 +1,28 @@
+{
+  "expo": {
+    "name": "Jarvis Mobile",
+    "slug": "jarvis-mobile",
+    "scheme": "jarvismobile",
+    "version": "5.0.0",
+    "orientation": "portrait",
+    "plugins": [
+      "expo-notifications",
+      [
+        "expo-speech-recognition",
+        {
+          "microphonePermission": "Pozwól Jarvisowi używać mikrofonu do voice capture.",
+          "speechRecognitionPermission": "Pozwól Jarvisowi rozpoznawać mowę do szybkiego dodawania zadań i myśli.",
+          "androidSpeechServicePackages": [
+            "com.google.android.googlequicksearchbox"
+          ]
+        }
+      ]
+    ],
+    "android": {
+      "permissions": [
+        "POST_NOTIFICATIONS",
+        "RECORD_AUDIO"
+      ]
+    }
+  }
+}

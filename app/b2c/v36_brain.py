@@ -1,8 +1,8 @@
 
 from __future__ import annotations
 
-from datetime import date, timedelta, datetime
-from typing import Any, Dict, List, Optional, Tuple
+from datetime import date, timedelta
+from typing import Any, Dict, List, Optional
 
 
 def _to_min(hhmm: str) -> int:
@@ -74,27 +74,6 @@ def _task_rows(tasks_mod, target_date: str) -> List[Dict[str, Any]]:
     return rows
 
 
-def _travel_line(origin: Optional[str], location: str, default_mode: Optional[str]) -> Optional[str]:
-    if not origin or not location:
-        return None
-    mode_map = {
-        "samochodem": "driving",
-        "komunikacją": "transit",
-        "komunikacja": "transit",
-        "rowerem": "bicycling",
-        "pieszo": "walking",
-    }
-    mode = mode_map.get((default_mode or "samochodem").strip().lower(), "driving")
-    try:
-        from app.b2c.maps_google import get_eta_minutes
-        eta = get_eta_minutes(origin, location, mode)
-    except Exception:
-        eta = None
-    if eta is None:
-        return None
-    return f"ETA {eta} min • wyjście {_fmt_hhmm(_to_min('00:00'))}"  # placeholder replaced by caller
-
-
 def _conflicts(rows: List[Dict[str, Any]]) -> List[str]:
     ordered = sorted(rows, key=lambda r: (r["start"], r["end"], r["title"]))
     risks = []
@@ -116,7 +95,7 @@ def _free_windows(rows: List[Dict[str, Any]]) -> List[str]:
         if row["start"] > prev_end:
             wins.append(f"{_fmt_hhmm(prev_end)}–{_fmt_hhmm(row['start'])}")
         prev_end = max(prev_end, row["end"])
-    return wins[:5]
+    return wins[:6]
 
 
 def calendar_brain(tasks_mod, origin: Optional[str], default_mode: Optional[str], day_offset: int = 0) -> str:
@@ -157,6 +136,7 @@ def calendar_brain(tasks_mod, origin: Optional[str], default_mode: Optional[str]
             if eta is not None:
                 leave = row["start"] - eta - 10
                 lines.append(f"   dojazd: ETA {eta} min • wyjście {_fmt_hhmm(leave)}")
+
     risks = _conflicts(rows)
     if risks:
         lines.extend(["", "Konflikty czasowe:"])
@@ -168,4 +148,50 @@ def calendar_brain(tasks_mod, origin: Optional[str], default_mode: Optional[str]
     if wins:
         lines.extend(["", "Wolne okna:"])
         lines.extend(f"• {w}" for w in wins)
+
+    return "\n".join(lines)
+
+
+def true_daily_planner(tasks_mod, origin: Optional[str], default_mode: Optional[str], day_offset: int = 0) -> str:
+    target = (date.today() + timedelta(days=day_offset)).isoformat()
+    rows = _event_rows(target) + _task_rows(tasks_mod, target)
+    rows.sort(key=lambda r: (r["start"], r["kind"], r["title"]))
+
+    title = "TRUE DAILY PLANNER"
+    if day_offset == 1:
+        title += " — JUTRO"
+    lines = [f"{title} — {target}", ""]
+
+    if not rows:
+        lines.append("Brak punktów na ten dzień.")
+        return "\n".join(lines)
+
+    lines.append("Timeline:")
+    for idx, row in enumerate(rows, start=1):
+        kind = "event" if row["kind"] == "event" else "task"
+        line = f"{idx}. {_fmt_hhmm(row['start'])}–{_fmt_hhmm(row['end'])} [{kind}] {row['title']}"
+        if row.get("location"):
+            line += f" ({row['location']})"
+        lines.append(line)
+
+    risks = _conflicts(rows)
+    wins = _free_windows(rows)
+
+    lines.extend(["", "Ocena dnia:"])
+    if risks:
+        lines.append("⚠️ Widzę konflikty w harmonogramie.")
+        lines.extend(f"• {r}" for r in risks)
+    else:
+        lines.append("✅ Nie widzę konfliktów czasowych.")
+
+    if wins:
+        lines.extend(["", "Największe wolne okna:"])
+        ordered_wins = sorted(wins, key=lambda x: (_to_min(x.split("–")[0]), x))
+        for w in ordered_wins[:5]:
+            lines.append(f"• {w}")
+
+    if rows:
+        lines.extend(["", "Sugestia:"])
+        lines.append(f"Zacznij od: {rows[0]['title']} o {_fmt_hhmm(rows[0]['start'])}.")
+
     return "\n".join(lines)

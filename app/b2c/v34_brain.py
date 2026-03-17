@@ -24,6 +24,11 @@ def _read_events_raw() -> List[Dict[str, Any]]:
         return []
 
 
+def _save_events(items: List[Dict[str, Any]]) -> None:
+    _ensure_dir()
+    EVENTS_FILE.write_text(json.dumps(items, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
 def _normalize_title(title: str) -> str:
     t = (title or "").strip(" ,.")
     low = t.lower()
@@ -52,9 +57,27 @@ def _normalize_key(title: str, due_date: str, due_time: str, location: Optional[
     )
 
 
-def _dedup_events(items: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-    seen = set()
-    out: List[Dict[str, Any]] = []
+def _to_min(hhmm: str) -> int:
+    hh, mm = hhmm.split(":")
+    return int(hh) * 60 + int(mm)
+
+
+def _fmt_hhmm(minutes: int) -> str:
+    minutes = max(0, int(minutes))
+    return f"{minutes // 60:02d}:{minutes % 60:02d}"
+
+
+def _smart_merge_events(items: List[Dict[str, Any]]) -> Tuple[List[Dict[str, Any]], int]:
+    """
+    Smart dedup:
+    - exact duplicates: title+date+time+location
+    - likely duplicates: same normalized title + same date + within 90 min
+      keep richer item (location wins), otherwise keep earlier time
+    """
+    normalized: List[Dict[str, Any]] = []
+    exact_seen = set()
+    removed = 0
+
     for item in items:
         key = _normalize_key(
             str(item.get("title") or ""),
@@ -62,25 +85,83 @@ def _dedup_events(items: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
             str(item.get("time") or ""),
             str(item.get("location") or ""),
         )
-        if key in seen:
+        if key in exact_seen:
+            removed += 1
             continue
-        seen.add(key)
+        exact_seen.add(key)
         norm = dict(item)
         norm["title"] = _normalize_title(str(norm.get("title") or ""))
-        out.append(norm)
-    out.sort(key=lambda x: (str(x.get("date") or ""), str(x.get("time") or ""), int(x.get("id") or 0)))
-    return out
+        normalized.append(norm)
+
+    normalized.sort(key=lambda x: (str(x.get("date") or ""), str(x.get("time") or ""), int(x.get("id") or 0)))
+
+    merged: List[Dict[str, Any]] = []
+    for item in normalized:
+        title = _normalize_title(str(item.get("title") or "")).lower()
+        d = str(item.get("date") or "")
+        t = str(item.get("time") or "")
+        if not d or not t:
+            merged.append(item)
+            continue
+
+        current_min = _to_min(t)
+        found_idx = None
+        for idx, existing in enumerate(merged):
+            ex_title = _normalize_title(str(existing.get("title") or "")).lower()
+            ex_date = str(existing.get("date") or "")
+            ex_time = str(existing.get("time") or "")
+            if ex_title != title or ex_date != d or not ex_time:
+                continue
+            if abs(_to_min(ex_time) - current_min) <= 90:
+                found_idx = idx
+                break
+
+        if found_idx is None:
+            merged.append(item)
+            continue
+
+        existing = merged[found_idx]
+        existing_loc = str(existing.get("location") or "").strip()
+        current_loc = str(item.get("location") or "").strip()
+
+        # choose richer record; if same richness keep earlier time
+        choose_current = False
+        if current_loc and not existing_loc:
+            choose_current = True
+        elif len(current_loc) > len(existing_loc):
+            choose_current = True
+        elif current_min < _to_min(str(existing.get("time") or "23:59")):
+            choose_current = True
+
+        if choose_current:
+            merged[found_idx] = item
+        removed += 1
+
+    merged.sort(key=lambda x: (str(x.get("date") or ""), str(x.get("time") or ""), int(x.get("id") or 0)))
+    return merged, removed
 
 
 def _load_events() -> List[Dict[str, Any]]:
-    items = _dedup_events(_read_events_raw())
+    items, removed = _smart_merge_events(_read_events_raw())
     _save_events(items)
     return items
 
 
-def _save_events(items: List[Dict[str, Any]]) -> None:
-    _ensure_dir()
-    EVENTS_FILE.write_text(json.dumps(items, ensure_ascii=False, indent=2), encoding="utf-8")
+def smart_dedup_events() -> str:
+    raw = _read_events_raw()
+    cleaned, removed = _smart_merge_events(raw)
+    _save_events(cleaned)
+    lines = ["SMART DEDUP", ""]
+    lines.append(f"Usunięte/scalone wpisy: {removed}")
+    lines.append(f"Pozostałe wydarzenia: {len(cleaned)}")
+    if cleaned:
+        lines.append("")
+        for ev in cleaned[:12]:
+            row = f"• {ev.get('date')} {ev.get('time')} — {ev.get('title')}"
+            if ev.get("location"):
+                row += f" ({ev.get('location')})"
+            lines.append(row)
+    return "\n".join(lines)
 
 
 def _norm_hhmm(raw: str) -> str:
@@ -122,11 +203,6 @@ def _find_duplicate(items: List[Dict[str, Any]], title: str, due_date: str, due_
         ) == key:
             return item
     return None
-
-
-def _to_min(hhmm: str) -> int:
-    hh, mm = hhmm.split(":")
-    return int(hh) * 60 + int(mm)
 
 
 def _collect_task_blocks(date_iso: str) -> List[Tuple[str, int, int]]:
@@ -197,7 +273,7 @@ def _add_event(title: str, due_date: str, due_time: str, location: Optional[str]
     event_id = max([int(x.get("id", 0)) for x in items], default=0) + 1
     item = {"id": event_id, "title": _normalize_title(title), "date": due_date, "time": due_time, "location": location or ""}
     items.append(item)
-    items = _dedup_events(items)
+    items, _ = _smart_merge_events(items)
     _save_events(items)
     return item, True, conflicts
 
@@ -266,6 +342,12 @@ def maybe_handle_event_nlp(message: str) -> Optional[Dict[str, str]]:
                     msg += f" • {ev['location']}"
                 if conflicts:
                     msg += "\n⚠️ Możliwy konflikt czasowy z: " + ", ".join(conflicts)
+                    try:
+                        from app.b2c.v36_1_brain import remember_conflict
+                        remember_conflict(ev['title'], ev['date'], ev['time'], conflicts)
+                        msg += "\n💡 Wpisz `rozwiąż konflikt`, żeby zobaczyć opcje."
+                    except Exception:
+                        pass
             else:
                 msg = f"ℹ️ To wydarzenie już istnieje: {ev['title']} ({ev['date']} {ev['time']})"
                 if ev.get("location"):
