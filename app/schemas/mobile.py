@@ -21,6 +21,37 @@ class MobileActionResponse(BaseModel):
     changed: bool = False
 
 
+class InboxListItem(BaseModel):
+    id: int
+    text: str
+    kind: str
+
+
+class InboxListResponse(BaseModel):
+    status: str
+    shopping: List[InboxListItem] = Field(default_factory=list)
+    unscheduled: List[InboxListItem] = Field(default_factory=list)
+
+
+class ShoppingConfirmRequest(BaseModel):
+    event_text: str
+    selected_item_ids: List[int] = Field(default_factory=list)
+    extra_items: List[str] = Field(default_factory=list)
+
+
+class MobileChatRequest(BaseModel):
+    message: str = Field(min_length=1)
+    conversation_tail: List[dict[str, Any]] = Field(default_factory=list)
+
+
+class MobileChatResponse(BaseModel):
+    status: str
+    intent: Optional[str] = None
+    reply: str
+    actions: List[dict[str, Any]] = Field(default_factory=list)
+    changed: bool = False
+
+
 class FreeWindow(BaseModel):
     start: str
     end: str
@@ -49,6 +80,8 @@ class TimelineItem(BaseModel):
     location: Optional[str] = None
     category: Optional[str] = None
     priority: Optional[int] = None
+    task_id: Optional[int] = None
+    deletable: bool = False
 
 
 class DaySummary(BaseModel):

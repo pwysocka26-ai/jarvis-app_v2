@@ -6,7 +6,8 @@ import re
 from datetime import date, timedelta
 from typing import Any, Dict, List, Optional
 
-from app.intent.router import route_intent, tasks_mod
+from app.b2c import inbox as inbox_mod
+from app.intent.router import tasks_mod
 from app.llm.ollama_client import OllamaClient
 
 
@@ -82,6 +83,8 @@ def _event_rows(target_date: str) -> List[Dict[str, Any]]:
             "location": str(e.get("location") or "").strip() or None,
             "category": category,
             "priority": CATEGORY_PRIORITY.get(category, 5),
+            "task_id": None,
+            "deletable": False,
         })
     return rows
 
@@ -92,11 +95,13 @@ def _task_rows(target_date: str) -> List[Dict[str, Any]]:
     except Exception:
         return []
     rows: List[Dict[str, Any]] = []
-    for idx, t in enumerate(tasks, start=1):
+    for t in tasks:
         due = str(t.get("due_at") or "")
-        if "T" not in due:
-            continue
-        time_s = due.split("T", 1)[1][:5]
+        task_id = t.get("id")
+        if "T" in due:
+            time_s = due.split("T", 1)[1][:5]
+        else:
+            time_s = "09:00"
         try:
             start = _to_min(time_s)
         except Exception:
@@ -108,7 +113,7 @@ def _task_rows(target_date: str) -> List[Dict[str, Any]]:
         title = str(t.get("title") or t.get("text") or "zadanie").strip()
         category = _classify_title(title)
         rows.append({
-            "id": f"task-{idx}",
+            "id": f"task-{task_id}",
             "kind": "task",
             "title": title,
             "start_min": start,
@@ -118,6 +123,8 @@ def _task_rows(target_date: str) -> List[Dict[str, Any]]:
             "location": str(t.get("location") or "").strip() or None,
             "category": category,
             "priority": CATEGORY_PRIORITY.get(category, 5),
+            "task_id": int(task_id) if isinstance(task_id, int) or str(task_id).isdigit() else None,
+            "deletable": True,
         })
     return rows
 
@@ -199,6 +206,8 @@ def build_day_payload(day_offset: int = 0) -> Dict[str, Any]:
             "location": row.get("location"),
             "category": row.get("category"),
             "priority": row.get("priority"),
+            "task_id": row.get("task_id"),
+            "deletable": row.get("deletable", False),
         })
 
     for idx, block in enumerate(blocks, start=1):
@@ -211,6 +220,8 @@ def build_day_payload(day_offset: int = 0) -> Dict[str, Any]:
             "location": None,
             "category": None,
             "priority": None,
+            "task_id": None,
+            "deletable": False,
         })
     timeline.sort(key=lambda r: (r["start"], r["end"], r["title"]))
 
@@ -224,44 +235,150 @@ def build_day_payload(day_offset: int = 0) -> Dict[str, Any]:
     }
 
 
+def _normalize_spaces(text: str) -> str:
+    return re.sub(r"\s+", " ", (text or "").strip()).strip()
+
+
+def _normalize_auto_task_text(text: str) -> str:
+    out = _normalize_spaces(text)
+    replacements = [
+        (r"\bjutro rano\b", "jutro 09:00"),
+        (r"\bdziś rano\b", "dziś 09:00"),
+        (r"\bdzis rano\b", "dzis 09:00"),
+        (r"\bjutro wieczorem\b", "jutro 20:00"),
+        (r"\bdziś wieczorem\b", "dziś 20:00"),
+        (r"\bdzis wieczorem\b", "dzis 20:00"),
+        (r"\bjutro po pracy\b", "jutro 18:00"),
+        (r"\bdziś po pracy\b", "dziś 18:00"),
+        (r"\bdzis po pracy\b", "dzis 18:00"),
+        (r"\bpo pracy\b", "dziś 18:00"),
+        (r"\bwieczorem\b", "20:00"),
+        (r"\brano\b", "09:00"),
+        (r"\bpopo[łl]udniu\b", "15:00"),
+    ]
+    for pat, repl in replacements:
+        out = re.sub(pat, repl, out, flags=re.I)
+    return _normalize_spaces(out)
+
+
+def _has_schedule(text: str) -> bool:
+    low = (text or "").strip().lower()
+    schedule_patterns = [
+        r"\bdziś\b", r"\bdzis\b", r"\bjutro\b", r"\bpojutrze\b",
+        r"\bponiedzia[łl]ek\b", r"\bwtorek\b", r"\bśroda\b", r"\bsroda\b",
+        r"\bczwartek\b", r"\bpi[aą]tek\b", r"\bsobota\b", r"\bniedziela\b",
+        r"\b\d{1,2}[:.]\d{2}\b",
+        r"\b\d{1,2}[./-]\d{1,2}(?:[./-]\d{2,4})?\b",
+    ]
+    return any(re.search(p, low) for p in schedule_patterns)
+
+
+def _looks_like_question(text: str) -> bool:
+    low = (text or "").strip().lower()
+    return ("?" in low) or low.startswith(("co ", "jak ", "kiedy ", "czy ", "ile ", "pokaż ", "pokaz "))
+
+
+def _extract_shopping_item(text: str) -> str:
+    cleaned = _normalize_spaces(text)
+    cleaned = re.sub(r"^(kup(ić)?|kupi[ćc]|dokup|weź|wez)\s+", "", cleaned, flags=re.I)
+    cleaned = re.sub(r"^(muszę|musze)\s+kup(ić)?\s+", "", cleaned, flags=re.I)
+    return cleaned.strip(" .,")
+
+
+def _is_shopping_item(text: str) -> bool:
+    low = (text or "").strip().lower()
+    if _has_schedule(low):
+        return False
+    return low.startswith(("kup ", "kupić ", "kupic ", "dokup ", "muszę kupić ", "musze kupic "))
+
+
+def _is_shopping_event(text: str) -> bool:
+    low = (text or "").strip().lower()
+    return _has_schedule(low) and any(x in low for x in ["zakupy", "na zakupy", "do sklepu", "jadę do sklepu", "jade do sklepu"])
+
+
+def _is_scheduled_task(text: str) -> bool:
+    low = (text or "").strip().lower()
+    if _is_shopping_event(low):
+        return False
+    return _has_schedule(low) and not _looks_like_question(low)
+
+
+def _classify_message(text: str) -> str:
+    if _looks_like_question(text):
+        return "question"
+    if _is_shopping_event(text):
+        return "shopping_event"
+    if _is_shopping_item(text):
+        return "shopping_item"
+    if _is_scheduled_task(text):
+        return "scheduled_task"
+    return "unscheduled_item"
+
+
+
+
+def _load_raw_inbox() -> List[Dict[str, Any]]:
+    data = inbox_mod._read_json(inbox_mod.INBOX_FILE, default=[])
+    return data if isinstance(data, list) else []
+
+
+def _save_raw_inbox(items: List[Dict[str, Any]]) -> None:
+    inbox_mod._write_json(inbox_mod.INBOX_FILE, items)
+
+def _append_inbox_item(text: str, kind: str = "task") -> Dict[str, Any]:
+    items = _load_raw_inbox()
+    record = {
+        "text": _normalize_spaces(text),
+        "created_at": inbox_mod._now_iso(),
+        "kind": kind,
+        "source": "mobile-v9",
+    }
+    items.append(record)
+    _save_raw_inbox(items)
+    return record
+
+
+def _shopping_items() -> List[Dict[str, Any]]:
+    items = _load_raw_inbox()
+    out: List[Dict[str, Any]] = []
+    for idx, item in enumerate(items, start=1):
+        text = str(item.get("text") or "").strip()
+        if not text:
+            continue
+        kind = str(item.get("kind") or "")
+        is_shopping = kind == "shopping" or _is_shopping_item(text) or "kup " in text.lower()
+        if is_shopping:
+            out.append({"id": idx, "text": text, "kind": "shopping"})
+    return out
+
+
+def list_inbox_items() -> Dict[str, Any]:
+    items = _load_raw_inbox()
+    unscheduled: List[Dict[str, Any]] = []
+    shopping: List[Dict[str, Any]] = []
+    for idx, item in enumerate(items, start=1):
+        text = str(item.get("text") or "").strip()
+        if not text:
+            continue
+        kind = str(item.get("kind") or "task")
+        row = {"id": idx, "text": text, "kind": kind}
+        if kind == "shopping" or _is_shopping_item(text) or text.lower().startswith("kup "):
+            shopping.append(row)
+        else:
+            unscheduled.append(row)
+    return {"status": "ok", "shopping": shopping, "unscheduled": unscheduled}
+
+
 def create_inbox_item(text: str) -> Dict[str, Any]:
-    out = route_intent(text, persona="b2c", mode="b2c")
+    kind = "shopping" if _is_shopping_item(text) else "task"
+    record = _append_inbox_item(_extract_shopping_item(text) if kind == "shopping" else text, kind=kind)
+    label = "listy zakupów" if kind == "shopping" else "Inboxa"
     return {
         "status": "ok",
-        "intent": str(out.get("intent") or ""),
-        "message": str(out.get("reply") or out.get("response") or "OK"),
+        "intent": "inbox_add",
+        "message": f"Dodałem do {label}: {record['text']}",
         "changed": True,
-    }
-
-
-def plan_tomorrow() -> Dict[str, Any]:
-    out = route_intent("zaplanuj jutro", persona="b2c", mode="b2c")
-    msg = str(out.get("reply") or out.get("response") or "Plan jutra został zaktualizowany.")
-    return {
-        "status": "ok",
-        "intent": str(out.get("intent") or "plan_tomorrow"),
-        "message": msg,
-        "changed": True,
-    }
-
-
-def get_memory() -> Dict[str, Any]:
-    try:
-        out = route_intent("co o mnie wiesz", persona="b2c", mode="b2c")
-        return {
-            "status": "ok",
-            "message": str(out.get("reply") or out.get("response") or ""),
-        }
-    except Exception:
-        return {"status": "ok", "message": ""}
-
-
-def get_priorities_tomorrow() -> Dict[str, Any]:
-    payload = build_day_payload(day_offset=1)
-    return {
-        "status": "ok",
-        "date": payload["date"],
-        "priorities": payload["priorities"],
     }
 
 
@@ -305,19 +422,207 @@ def _normalize_json_candidate(text: str) -> Optional[Dict[str, Any]]:
 
 
 def _fallback_plan(message: str) -> Dict[str, Any]:
-    text = (message or "").strip()
+    return {"reply": "Nie udało się sparsować odpowiedzi AI.", "actions": []}
+
+
+def plan_tomorrow() -> Dict[str, Any]:
+    payload = build_day_payload(day_offset=1)
+    return {
+        "status": "ok",
+        "intent": "plan_tomorrow",
+        "message": f"Jutro masz {len(payload.get('timeline') or [])} pozycji w planie.",
+        "changed": False,
+    }
+
+
+def get_memory() -> Dict[str, Any]:
+    try:
+        from app.b2c.router import _suggest_next_best_action
+        return {"status": "ok", "message": str(_suggest_next_best_action() or "")}
+    except Exception:
+        return {"status": "ok", "message": ""}
+
+
+def get_priorities_tomorrow() -> Dict[str, Any]:
+    payload = build_day_payload(day_offset=1)
+    return {
+        "status": "ok",
+        "date": payload["date"],
+        "priorities": payload["priorities"],
+    }
+
+
+def _summarize_today() -> str:
+    payload = build_day_payload(day_offset=0)
+    timeline = payload.get("timeline") or []
+    if not timeline:
+        return "Dziś nie masz jeszcze nic konkretnego w planie."
+    lines = [f"Dziś masz {len(timeline)} pozycji."]
+    for item in timeline[:6]:
+        lines.append(f"- {item.get('start')} {item.get('title')}")
+    return "\n".join(lines)
+
+
+def _summarize_tomorrow() -> str:
+    payload = build_day_payload(day_offset=1)
+    timeline = payload.get("timeline") or []
+    if not timeline:
+        return "Jutro nie masz jeszcze nic konkretnego w planie."
+    lines = [f"Jutro masz {len(timeline)} pozycji."]
+    for item in timeline[:6]:
+        lines.append(f"- {item.get('start')} {item.get('title')}")
+    return "\n".join(lines)
+
+
+def chat_command(message: str, conversation_tail: Optional[List[Dict[str, Any]]] = None) -> Dict[str, Any]:
+    text = _normalize_spaces(message)
     low = text.lower()
-    if any(k in low for k in ["jutro", "dziś", "dzisiaj", "dodaj", "spotkanie", "dentysta", "zakupy"]) or re.search(r"\b\d{1,2}[:.]\d{2}\b", low):
+    intent = _classify_message(text)
+
+    if "co mam dziś" in low or "co mam dzis" in low:
         return {
-            "reply": "Brzmi jak zadanie lub wydarzenie. Dodam to do Inboxa.",
-            "actions": [{"type": "add_inbox", "text": text}],
+            "status": "ok",
+            "intent": "question_today",
+            "reply": _summarize_today(),
+            "actions": [],
+            "changed": False,
         }
-    if "plan" in low and "jutr" in low:
+
+    if "plan jutra" in low or "co mam jutro" in low:
         return {
-            "reply": "Uruchamiam planner jutra.",
-            "actions": [{"type": "plan_tomorrow"}],
+            "status": "ok",
+            "intent": "question_tomorrow",
+            "reply": _summarize_tomorrow(),
+            "actions": [],
+            "changed": False,
         }
-    return {"reply": "Ollama odpowiedziała bez poprawnego JSON. Pokazuję odpowiedź tekstową.", "actions": []}
+
+    if intent == "shopping_event":
+        options = _shopping_items()
+        normalized = _normalize_auto_task_text(text)
+        if options:
+            return {
+                "status": "ok",
+                "intent": "shopping_event_review",
+                "reply": "Widzę rzeczy zakupowe w Inboxie. Zaznacz, co dodać do zadania zakupów, a potem możesz jeszcze coś dopisać ręcznie.",
+                "actions": [{
+                    "type": "shopping_review",
+                    "event_text": normalized,
+                    "items": options,
+                }],
+                "changed": False,
+            }
+        out = tasks_mod.add_task(f"dodaj: {normalized} zakupy")
+        return {
+            "status": "ok",
+            "intent": "shopping_event_empty",
+            "reply": str(out.get("reply") or "Dodałem zakupy do planu."),
+            "actions": [],
+            "changed": True,
+        }
+
+    if intent == "scheduled_task":
+        normalized = _normalize_auto_task_text(text)
+        out = tasks_mod.add_task(f"dodaj: {normalized}")
+        return {
+            "status": "ok",
+            "intent": "scheduled_task",
+            "reply": str(out.get("reply") or "Dodałem zadanie do planu."),
+            "actions": [],
+            "changed": True,
+        }
+
+    if intent == "shopping_item":
+        item_text = _extract_shopping_item(text)
+        _append_inbox_item(item_text, kind="shopping")
+        return {
+            "status": "ok",
+            "intent": "shopping_item",
+            "reply": f"Dodałem do listy zakupów w Inboxie: {item_text}",
+            "actions": [],
+            "changed": True,
+        }
+
+    if intent == "unscheduled_item":
+        _append_inbox_item(text, kind="task")
+        return {
+            "status": "ok",
+            "intent": "unscheduled_item",
+            "reply": f"Dodałem do Inboxa bez terminu: {text}",
+            "actions": [],
+            "changed": True,
+        }
+
+    ai = ollama_chat(text, conversation_tail=conversation_tail)
+    return {
+        "status": "ok",
+        "intent": "question_ai",
+        "reply": str(ai.get("reply") or ""),
+        "actions": ai.get("actions") or [],
+        "changed": False,
+    }
+
+
+def confirm_shopping_event(event_text: str, selected_item_ids: List[int], extra_items: List[str]) -> Dict[str, Any]:
+    items = _load_raw_inbox()
+    selected_texts: List[str] = []
+    keep: List[Dict[str, Any]] = []
+    selected = {int(x) for x in selected_item_ids}
+    for idx, item in enumerate(items, start=1):
+        text = str(item.get("text") or "").strip()
+        if idx in selected:
+            if text:
+                selected_texts.append(text)
+        else:
+            keep.append(item)
+
+    extras = [_normalize_spaces(x) for x in (extra_items or []) if _normalize_spaces(x)]
+    all_items = selected_texts + extras
+    if not all_items:
+        return {
+            "status": "warning",
+            "intent": "shopping_confirm",
+            "message": "Nie zaznaczono żadnych pozycji. Nic nie zostało utworzone.",
+            "changed": False,
+        }
+
+    normalized_event = _normalize_auto_task_text(event_text)
+    synthetic = f"dodaj: {normalized_event} zakupy: " + ", ".join(all_items)
+    out = tasks_mod.add_task(synthetic)
+    _save_raw_inbox(keep)
+    return {
+        "status": "ok",
+        "intent": "shopping_confirm",
+        "message": str(out.get("reply") or "Utworzyłem zadanie zakupów."),
+        "changed": True,
+    }
+
+
+def delete_plan_task(task_id: int) -> Dict[str, Any]:
+    out = tasks_mod.delete_task_by_id(int(task_id))
+    return {
+        "status": "ok" if out.get("ok") else "warning",
+        "intent": "delete_task",
+        "message": str(out.get("reply") or "Usunięto zadanie."),
+        "changed": bool(out.get("ok")),
+    }
+
+
+def clear_day_tasks(target_date: str) -> Dict[str, Any]:
+    tasks = tasks_mod.list_tasks_for_date(target_date) or []
+    removed = 0
+    for task in tasks:
+        due = str(task.get("due_at") or "")
+        if due.startswith(target_date):
+            out = tasks_mod.delete_task_by_id(int(task.get("id")))
+            if out.get("ok"):
+                removed += 1
+    return {
+        "status": "ok",
+        "intent": "clear_day",
+        "message": f"Usunięto {removed} zadań z dnia {target_date}.",
+        "changed": removed > 0,
+    }
 
 
 def ollama_health(model: Optional[str] = None) -> Dict[str, Any]:
@@ -347,14 +652,10 @@ def ollama_chat(message: str, model: Optional[str] = None, conversation_tail: Op
     }
 
     system_prompt = (
-        "Jesteś Jarvisem — organizerem, AI plannerem dnia i second brain. "
+        "Jesteś Jarvisem — organizerem i plannerem dnia. "
         "Odpowiadasz po polsku, krótko i konkretnie. "
-        "Na podstawie wiadomości użytkowniczki i kontekstu zwróć WYŁĄCZNIE JSON w formacie: "
-        '{"reply": string, "actions": [{"type": "add_inbox", "text": string} | {"type": "plan_tomorrow"} | {"type": "save_brain_note", "title": string, "content": string, "pinned": boolean}]}.'
-        " Jeżeli użytkowniczka chce dodać zadanie lub wydarzenie, użyj add_inbox. "
-        "Jeżeli prosi o plan jutra, użyj plan_tomorrow. "
-        "Jeżeli przekazuje ważną preferencję, decyzję, notatkę lub wiedzę, użyj save_brain_note. "
-        "Jeżeli wystarczy sama odpowiedź, zwróć pustą listę actions."
+        "Zwróć WYŁĄCZNIE JSON: "
+        '{"reply": string, "actions": []}.'
     )
 
     messages = [
@@ -377,4 +678,4 @@ def ollama_chat(message: str, model: Optional[str] = None, conversation_tail: Op
 
 
 def health() -> Dict[str, str]:
-    return {"status": "ok", "product": "Jarvis Mobile API", "version": "v1"}
+    return {"status": "ok", "product": "Jarvis Mobile API", "version": "v9"}
