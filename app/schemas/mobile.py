@@ -1,8 +1,7 @@
-
 from __future__ import annotations
 
-from typing import List, Literal, Optional
-from pydantic import BaseModel
+from typing import Any, List, Literal, Optional
+from pydantic import BaseModel, Field
 
 
 class MobileHealthResponse(BaseModel):
@@ -65,3 +64,26 @@ class DayScreenPayload(BaseModel):
     free_windows: List[FreeWindow]
     time_blocks: List[TimeBlock]
     priorities: List[PriorityItem]
+
+
+class MobileAiChatRequest(BaseModel):
+    message: str = Field(min_length=1)
+    model: Optional[str] = None
+    conversation_tail: List[dict[str, Any]] = Field(default_factory=list)
+    local_brain_notes: List[dict[str, Any]] = Field(default_factory=list)
+
+
+class MobileAiChatResponse(BaseModel):
+    status: str
+    reply: str
+    actions: List[dict[str, Any]] = Field(default_factory=list)
+    model: Optional[str] = None
+    source: str = "ollama"
+
+
+class MobileAiHealthResponse(BaseModel):
+    status: str
+    available: bool
+    model: str
+    base_url: str
+    source: str = "ollama"

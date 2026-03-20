@@ -1,10 +1,13 @@
-
 from __future__ import annotations
 
+import json
+import os
+import re
 from datetime import date, timedelta
 from typing import Any, Dict, List, Optional
 
-from app.intent.router import route_intent, tasks_mod, _get_origin_address, _get_place
+from app.intent.router import route_intent, tasks_mod
+from app.llm.ollama_client import OllamaClient
 
 
 CATEGORY_PRIORITY = {
@@ -16,6 +19,10 @@ CATEGORY_PRIORITY = {
     "zakupy": 4,
     "inne": 5,
 }
+
+OLLAMA_URL = os.getenv("OLLAMA_URL", "http://127.0.0.1:11434").rstrip("/")
+OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "llama3.1:8b").strip() or "llama3.1:8b"
+OLLAMA_TIMEOUT = float(os.getenv("OLLAMA_TIMEOUT", "90"))
 
 
 def _to_min(hhmm: str) -> int:
@@ -258,9 +265,116 @@ def get_priorities_tomorrow() -> Dict[str, Any]:
     }
 
 
-def health() -> Dict[str, str]:
+def _compact_day_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
+    timeline = []
+    for item in (payload.get("timeline") or [])[:12]:
+        timeline.append({
+            "title": item.get("title"),
+            "start": item.get("start"),
+            "end": item.get("end"),
+            "kind": item.get("kind"),
+            "category": item.get("category"),
+            "location": item.get("location"),
+        })
+    return {
+        "date": payload.get("date"),
+        "summary": payload.get("summary"),
+        "timeline": timeline,
+        "free_windows": payload.get("free_windows") or [],
+        "priorities": payload.get("priorities") or [],
+    }
+
+
+def _normalize_json_candidate(text: str) -> Optional[Dict[str, Any]]:
+    raw = (text or "").strip()
+    if not raw:
+        return None
+    try:
+        obj = json.loads(raw)
+        return obj if isinstance(obj, dict) else None
+    except Exception:
+        pass
+    m = re.search(r"\{.*\}", raw, flags=re.S)
+    if not m:
+        return None
+    try:
+        obj = json.loads(m.group(0))
+        return obj if isinstance(obj, dict) else None
+    except Exception:
+        return None
+
+
+def _fallback_plan(message: str) -> Dict[str, Any]:
+    text = (message or "").strip()
+    low = text.lower()
+    if any(k in low for k in ["jutro", "dziś", "dzisiaj", "dodaj", "spotkanie", "dentysta", "zakupy"]) or re.search(r"\b\d{1,2}[:.]\d{2}\b", low):
+        return {
+            "reply": "Brzmi jak zadanie lub wydarzenie. Dodam to do Inboxa.",
+            "actions": [{"type": "add_inbox", "text": text}],
+        }
+    if "plan" in low and "jutr" in low:
+        return {
+            "reply": "Uruchamiam planner jutra.",
+            "actions": [{"type": "plan_tomorrow"}],
+        }
+    return {"reply": "Ollama odpowiedziała bez poprawnego JSON. Pokazuję odpowiedź tekstową.", "actions": []}
+
+
+def ollama_health(model: Optional[str] = None) -> Dict[str, Any]:
+    chosen_model = (model or OLLAMA_MODEL).strip() or OLLAMA_MODEL
+    client = OllamaClient(OLLAMA_URL, chosen_model, timeout_s=10.0)
+    available = client.ping()
+    return {
+        "status": "ok" if available else "warning",
+        "available": available,
+        "model": chosen_model,
+        "base_url": OLLAMA_URL,
+        "source": "ollama",
+    }
+
+
+def ollama_chat(message: str, model: Optional[str] = None, conversation_tail: Optional[List[Dict[str, Any]]] = None, local_brain_notes: Optional[List[Dict[str, Any]]] = None) -> Dict[str, Any]:
+    chosen_model = (model or OLLAMA_MODEL).strip() or OLLAMA_MODEL
+    client = OllamaClient(OLLAMA_URL, chosen_model, timeout_s=OLLAMA_TIMEOUT)
+
+    context = {
+        "today": _compact_day_payload(build_day_payload(day_offset=0)),
+        "tomorrow": _compact_day_payload(build_day_payload(day_offset=1)),
+        "priorities_tomorrow": get_priorities_tomorrow(),
+        "memory": get_memory(),
+        "local_brain_notes": (local_brain_notes or [])[:8],
+        "conversation_tail": (conversation_tail or [])[-8:],
+    }
+
+    system_prompt = (
+        "Jesteś Jarvisem — organizerem, AI plannerem dnia i second brain. "
+        "Odpowiadasz po polsku, krótko i konkretnie. "
+        "Na podstawie wiadomości użytkowniczki i kontekstu zwróć WYŁĄCZNIE JSON w formacie: "
+        '{"reply": string, "actions": [{"type": "add_inbox", "text": string} | {"type": "plan_tomorrow"} | {"type": "save_brain_note", "title": string, "content": string, "pinned": boolean}]}.'
+        " Jeżeli użytkowniczka chce dodać zadanie lub wydarzenie, użyj add_inbox. "
+        "Jeżeli prosi o plan jutra, użyj plan_tomorrow. "
+        "Jeżeli przekazuje ważną preferencję, decyzję, notatkę lub wiedzę, użyj save_brain_note. "
+        "Jeżeli wystarczy sama odpowiedź, zwróć pustą listę actions."
+    )
+
+    messages = [
+        {"role": "system", "content": system_prompt},
+        {"role": "user", "content": "KONTEKST JARVISA:\n" + json.dumps(context, ensure_ascii=False)},
+        {"role": "user", "content": "WIADOMOŚĆ UŻYTKOWNICZKI:\n" + (message or "")},
+    ]
+
+    raw = client.chat(messages)
+    plan = _normalize_json_candidate(raw) or _fallback_plan(message)
+    reply = str(plan.get("reply") or raw or "Jarvis nie zwrócił odpowiedzi.")
+    actions = plan.get("actions") if isinstance(plan.get("actions"), list) else []
     return {
         "status": "ok",
-        "product": "Jarvis Mobile API",
-        "version": "v1",
+        "reply": reply,
+        "actions": actions,
+        "model": chosen_model,
+        "source": "ollama",
     }
+
+
+def health() -> Dict[str, str]:
+    return {"status": "ok", "product": "Jarvis Mobile API", "version": "v1"}

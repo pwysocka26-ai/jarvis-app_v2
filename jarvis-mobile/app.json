@@ -2,27 +2,24 @@
   "expo": {
     "name": "Jarvis Mobile",
     "slug": "jarvis-mobile",
-    "scheme": "jarvismobile",
-    "version": "5.0.0",
+    "version": "1.0.0",
+    "scheme": "com.anonymous.jarvismobile",
     "orientation": "portrait",
-    "plugins": [
-      "expo-notifications",
-      [
-        "expo-speech-recognition",
-        {
-          "microphonePermission": "Pozwól Jarvisowi używać mikrofonu do voice capture.",
-          "speechRecognitionPermission": "Pozwól Jarvisowi rozpoznawać mowę do szybkiego dodawania zadań i myśli.",
-          "androidSpeechServicePackages": [
-            "com.google.android.googlequicksearchbox"
-          ]
-        }
-      ]
+    "userInterfaceStyle": "automatic",
+    "newArchEnabled": false,
+    "assetBundlePatterns": [
+      "**/*"
     ],
     "android": {
+      "package": "com.anonymous.jarvismobile",
       "permissions": [
-        "POST_NOTIFICATIONS",
-        "RECORD_AUDIO"
+        "RECORD_AUDIO",
+        "POST_NOTIFICATIONS"
       ]
-    }
+    },
+    "plugins": [
+      "expo-notifications",
+      "expo-speech-recognition"
+    ]
   }
 }

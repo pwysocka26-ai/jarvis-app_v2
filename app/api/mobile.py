@@ -1,4 +1,3 @@
-
 from __future__ import annotations
 
 from fastapi import APIRouter
@@ -8,6 +7,9 @@ from app.schemas.mobile import (
     MobileActionResponse,
     MobileHealthResponse,
     DayScreenPayload,
+    MobileAiChatRequest,
+    MobileAiChatResponse,
+    MobileAiHealthResponse,
 )
 from app.services.mobile_service import (
     build_day_payload,
@@ -16,6 +18,8 @@ from app.services.mobile_service import (
     get_priorities_tomorrow,
     health,
     plan_tomorrow,
+    ollama_chat,
+    ollama_health,
 )
 
 router = APIRouter(prefix="/mobile", tags=["mobile"])
@@ -54,3 +58,18 @@ def mobile_memory():
 @router.get("/priorities/tomorrow")
 def mobile_priorities_tomorrow():
     return get_priorities_tomorrow()
+
+
+@router.get("/ai/health", response_model=MobileAiHealthResponse)
+def mobile_ai_health(model: str | None = None) -> MobileAiHealthResponse:
+    return MobileAiHealthResponse(**ollama_health(model=model))
+
+
+@router.post("/ai/chat", response_model=MobileAiChatResponse)
+def mobile_ai_chat(req: MobileAiChatRequest) -> MobileAiChatResponse:
+    return MobileAiChatResponse(**ollama_chat(
+        message=req.message,
+        model=req.model,
+        conversation_tail=req.conversation_tail,
+        local_brain_notes=req.local_brain_notes,
+    ))

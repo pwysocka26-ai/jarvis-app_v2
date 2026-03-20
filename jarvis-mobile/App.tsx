@@ -1,1351 +1,1163 @@
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import {
   ActivityIndicator,
   Alert,
   KeyboardAvoidingView,
   Platform,
-  Pressable,
   SafeAreaView,
   ScrollView,
   StyleSheet,
+  Switch,
   Text,
   TextInput,
+  TouchableOpacity,
   View,
-} from 'react-native';
+} from "react-native";
+import AsyncStorage from "@react-native-async-storage/async-storage";
 
-let AsyncStorage: any = null;
-let Notifications: any = null;
-let SpeechRecognitionModule: any = null;
-
-try {
-  AsyncStorage = require('@react-native-async-storage/async-storage').default;
-} catch {}
-try {
-  Notifications = require('expo-notifications');
-  Notifications?.setNotificationHandler?.({
-    handleNotification: async () => ({
-      shouldShowAlert: true,
-      shouldPlaySound: true,
-      shouldSetBadge: false,
-      shouldShowBanner: true,
-      shouldShowList: true,
-    }),
-  });
-} catch {}
-try {
-  const speechPkg = require('expo-speech-recognition');
-  SpeechRecognitionModule = speechPkg?.ExpoSpeechRecognitionModule || speechPkg?.default || speechPkg;
-} catch {}
-
-type TabKey = 'home' | 'chat' | 'plan' | 'brain' | 'inbox' | 'settings';
-type PlanMode = 'today' | 'tomorrow';
-
-type TimelineItem = {
-  id: string;
-  kind: 'event' | 'task' | 'focus' | 'break' | 'lunch';
-  title: string;
-  start: string;
-  end: string;
-  location?: string | null;
-  category?: string | null;
-  priority?: number | null;
-};
-
-type DayPayload = {
-  date: string;
-  summary: {
-    next_item?: string | null;
-    next_time?: string | null;
-    status: 'ok' | 'warning' | 'empty';
-  };
-  timeline: TimelineItem[];
-  free_windows: { start: string; end: string }[];
-  time_blocks: { start: string; end: string; label: string }[];
-  priorities: { title: string; category: string; priority: number; time?: string | null; kind: 'event' | 'task' }[];
-};
-
-type ActionResponse = { status: string; intent?: string; message: string; changed: boolean };
-type MemoryResponse = { status: string; message?: string };
-type ChatMessage = { id: string; role: 'user' | 'assistant'; text: string; intent?: string | null };
-type HealthResponse = { status: string; product: string; version: string };
-
-type BrainNote = {
-  id: string;
-  title: string;
-  text: string;
-  tags: string[];
-  createdAt: string;
-  source: 'chat' | 'voice' | 'inbox' | 'manual';
-  pinned?: boolean;
-};
-
-type SettingsState = {
-  apiBase: string;
-  apiToken: string;
-  notificationsEnabled: boolean;
-  voiceAutoSend: boolean;
-  autoplanAfterInbox: boolean;
-};
-
-type VoiceState = {
-  listening: boolean;
-  liveText: string;
-  error: string;
-};
-
-const STORAGE_KEY = 'jarvis-mobile-v5-settings';
-const BRAIN_NOTES_KEY = 'jarvis-mobile-v5-brain-notes';
-const REQUEST_TIMEOUT_MS = 9000;
-const JARVIS_NOTIFICATION_PREFIX = 'jarvis-mobile-';
-
-const colors = {
-  bg: '#0B1020',
-  surface: '#121A2C',
-  card: '#172033',
-  card2: '#1E293B',
-  text: '#F8FAFC',
-  muted: '#94A3B8',
-  border: '#23304A',
-  primary: '#60A5FA',
-  primaryStrong: '#2563EB',
-  good: '#34D399',
-  warning: '#FBBF24',
-  danger: '#F87171',
-  chip: '#111827',
-};
-
-const EMPTY_DAY: DayPayload = {
-  date: '',
-  summary: { status: 'empty', next_item: null, next_time: null },
-  timeline: [],
-  free_windows: [],
-  time_blocks: [],
-  priorities: [],
-};
-
-const DEFAULT_SETTINGS: SettingsState = {
-  apiBase: 'http://192.168.8.118:8011',
-  apiToken: '',
-  notificationsEnabled: true,
-  voiceAutoSend: false,
-  autoplanAfterInbox: false,
-};
-
-const QUICK_CAPTURE = [
-  'jutro 9:00 dentysta',
-  'dziś 18:00 zakupy',
-  'jutro 8:30 wyślij CV',
-  'jutro 19:00 oddzwoń do mamy',
-];
-const QUICK_CHAT = ['Co mam dziś najważniejsze?', 'Pokaż listę na jutro', 'Zaplanuj mi jutro', 'Co o mnie pamiętasz?'];
-
-function uid(prefix: string) {
-  return `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-}
-
-function normalizeBaseUrl(value: string) {
-  return value.trim().replace(/\/+$/, '');
-}
-
-function buildHeaders(settings: SettingsState) {
-  const headers: Record<string, string> = {};
-  if (settings.apiToken.trim()) headers['X-API-Token'] = settings.apiToken.trim();
-  return headers;
-}
-
-function humanizeFetchError(error: unknown) {
-  const message = error instanceof Error ? error.message : String(error || 'Nieznany błąd');
-  if (message.includes('timeout')) return 'Backend nie odpowiedział w 9 sekund. Sprawdź serwer i Wi‑Fi.';
-  if (message.includes('Network request failed') || message.includes('fetch')) return 'Telefon nie może połączyć się z backendem. Sprawdź IP, to samo Wi‑Fi i firewall.';
-  return message;
-}
-
-async function fetchWithTimeout(url: string, options?: RequestInit): Promise<Response> {
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+const Notifications: any = (() => {
   try {
-    return await fetch(url, { ...options, signal: controller.signal });
-  } catch (error) {
-    if ((error as Error)?.name === 'AbortError') throw new Error('timeout');
-    throw error;
-  } finally {
-    clearTimeout(timer);
-  }
-}
-
-async function parseApiResponse<T>(response: Response): Promise<T> {
-  const raw = await response.text().catch(() => '');
-  const contentType = response.headers.get('content-type') || '';
-  if (!response.ok) throw new Error(raw.trim().slice(0, 180) || `HTTP ${response.status}`);
-  if (!raw.trim()) return {} as T;
-  if (contentType.includes('application/json')) return JSON.parse(raw) as T;
-  const trimmed = raw.trim();
-  if (trimmed.startsWith('{') || trimmed.startsWith('[')) return JSON.parse(trimmed) as T;
-  if (trimmed.startsWith('<')) throw new Error('Backend zwrócił HTML zamiast JSON. Sprawdź adres backendu.');
-  throw new Error(trimmed.slice(0, 180) || 'Nieznana odpowiedź backendu.');
-}
-
-async function apiGet<T>(settings: SettingsState, path: string): Promise<T> {
-  try {
-    const response = await fetchWithTimeout(`${normalizeBaseUrl(settings.apiBase)}${path}`, { headers: buildHeaders(settings) });
-    return await parseApiResponse<T>(response);
-  } catch (error) {
-    throw new Error(humanizeFetchError(error));
-  }
-}
-
-async function apiPost<T>(settings: SettingsState, path: string, body?: unknown): Promise<T> {
-  try {
-    const response = await fetchWithTimeout(`${normalizeBaseUrl(settings.apiBase)}${path}`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', ...buildHeaders(settings) },
-      body: body ? JSON.stringify(body) : undefined,
-    });
-    return await parseApiResponse<T>(response);
-  } catch (error) {
-    throw new Error(humanizeFetchError(error));
-  }
-}
-
-function formatDayLabel(iso: string) {
-  return iso || 'brak daty';
-}
-
-function statusColor(status?: string) {
-  if (status === 'ok') return colors.good;
-  if (status === 'warning') return colors.warning;
-  return colors.muted;
-}
-
-function summarizeDay(payload: DayPayload, title: string) {
-  const rows = payload.timeline.length
-    ? payload.timeline.slice(0, 6).map((item) => `• ${item.start} ${item.title}`).join('\n')
-    : 'Brak pozycji.';
-  return `${title}\nData: ${payload.date || 'brak'}\nNajbliższy punkt: ${payload.summary.next_item || 'brak'}${payload.summary.next_time ? ` o ${payload.summary.next_time}` : ''}\n\n${rows}`;
-}
-
-function summarizePriorities(items: DayPayload['priorities']) {
-  if (!items.length) return 'Brak priorytetów jutra.';
-  return items.slice(0, 6).map((item) => `• P${item.priority} ${item.time || 'bez godziny'} — ${item.title} (${item.category})`).join('\n');
-}
-
-function parseTags(value: string) {
-  return value
-    .split(/[,#]/)
-    .map((tag) => tag.trim().toLowerCase())
-    .filter(Boolean)
-    .slice(0, 6);
-}
-
-function notePreview(note: BrainNote) {
-  return note.text.length > 120 ? `${note.text.slice(0, 120)}…` : note.text;
-}
-
-function createBrainNote(input: { title?: string; text: string; tags?: string[]; source?: BrainNote['source']; pinned?: boolean }): BrainNote {
-  const text = input.text.trim();
-  const title = (input.title || text.split(/[.!?\n]/)[0] || 'Nowa myśl').trim();
-  return {
-    id: uid('brain'),
-    title: title.slice(0, 80),
-    text,
-    tags: (input.tags || []).filter(Boolean),
-    createdAt: new Date().toISOString(),
-    source: input.source || 'manual',
-    pinned: input.pinned || false,
-  };
-}
-
-async function runChatIntent(settings: SettingsState, text: string): Promise<{ reply: string; intent?: string | null }> {
-  const lower = text.trim().toLowerCase();
-  if (!lower) return { reply: 'Napisz do Jarvisa dowolne polecenie.' };
-
-  if (lower.includes('co o mnie pamiętasz') || lower.includes('co o mnie wiesz') || lower.includes('pamiętasz')) {
-    const memory = await apiGet<MemoryResponse>(settings, '/mobile/memory');
-    return { reply: memory.message || 'Brak pamięci do wyświetlenia.', intent: 'memory' };
-  }
-  if (lower.includes('zaplanuj') && lower.includes('jutro')) {
-    const result = await apiPost<ActionResponse>(settings, '/mobile/plan/tomorrow');
-    return { reply: result.message || 'Plan jutra został zaktualizowany.', intent: result.intent || 'plan_tomorrow' };
-  }
-  if (lower.includes('priorytet') || lower.includes('najważniejsze jutro') || (lower.includes('jutro') && lower.includes('najważniejsze'))) {
-    const result = await apiGet<{ status: string; date: string; priorities: DayPayload['priorities'] }>(settings, '/mobile/priorities/tomorrow');
-    return { reply: `Top priorytety na jutro (${result.date}):\n\n${summarizePriorities(result.priorities || [])}`, intent: 'priorities_tomorrow' };
-  }
-  if (lower.includes('lista na jutro') || lower.includes('pokaż listę na jutro') || lower.includes('co mam jutro') || lower === 'jutro') {
-    const result = await apiGet<DayPayload>(settings, '/mobile/tomorrow');
-    return { reply: summarizeDay(result, 'Plan na jutro'), intent: 'tomorrow' };
-  }
-  if (lower.includes('co mam dziś') || lower.includes('co mam dzis') || lower.includes('najważniejsze dziś') || lower.includes('plan dnia') || lower === 'dziś' || lower === 'dzis') {
-    const result = await apiGet<DayPayload>(settings, '/mobile/today');
-    return { reply: summarizeDay(result, 'Plan na dziś'), intent: 'today' };
-  }
-
-  const inboxResult = await apiPost<ActionResponse>(settings, '/mobile/inbox', { text });
-  return { reply: inboxResult.message || 'Dodano do inboxa.', intent: inboxResult.intent || 'inbox' };
-}
-
-function toDateFromDayAndTime(dayIso: string, timeText: string) {
-  if (!dayIso || !timeText || !/^\d{2}:\d{2}$/.test(timeText)) return null;
-  const [year, month, day] = dayIso.split('-').map(Number);
-  const [hours, minutes] = timeText.split(':').map(Number);
-  if (![year, month, day, hours, minutes].every((x) => Number.isFinite(x))) return null;
-  return new Date(year, month - 1, day, hours, minutes, 0, 0);
-}
-
-async function ensureNotificationPermission() {
-  if (!Notifications) throw new Error('Pakiet expo-notifications nie jest dostępny.');
-  const existing = await Notifications.getPermissionsAsync?.();
-  let granted = existing?.granted || existing?.ios?.status === Notifications.IosAuthorizationStatus?.AUTHORIZED;
-  if (!granted) {
-    const request = await Notifications.requestPermissionsAsync?.();
-    granted = request?.granted || request?.ios?.status === Notifications.IosAuthorizationStatus?.AUTHORIZED;
-  }
-  if (!granted) throw new Error('Brak zgody na powiadomienia.');
-  if (Platform.OS === 'android') {
-    await Notifications.setNotificationChannelAsync?.('jarvis-reminders', {
-      name: 'Jarvis reminders',
-      importance: Notifications.AndroidImportance?.MAX ?? 5,
-      vibrationPattern: [0, 200, 100, 200],
-      lightColor: '#2563EB',
-    });
-  }
-}
-
-async function clearJarvisNotifications() {
-  if (!Notifications?.getAllScheduledNotificationsAsync) return;
-  const scheduled = await Notifications.getAllScheduledNotificationsAsync();
-  for (const item of scheduled) {
-    if (String(item?.content?.data?.jarvisKey || '').startsWith(JARVIS_NOTIFICATION_PREFIX)) {
-      await Notifications.cancelScheduledNotificationAsync?.(item.identifier);
-    }
-  }
-}
-
-async function scheduleTimelineNotifications(dayIso: string, items: TimelineItem[]) {
-  if (!Notifications) throw new Error('Pakiet expo-notifications nie jest dostępny.');
-  await ensureNotificationPermission();
-  const now = Date.now();
-  let count = 0;
-  for (const item of items) {
-    const startAt = toDateFromDayAndTime(dayIso, item.start);
-    if (!startAt) continue;
-    const notifyAt = new Date(startAt.getTime() - 15 * 60 * 1000);
-    if (notifyAt.getTime() <= now + 5000) continue;
-    count += 1;
-    await Notifications.scheduleNotificationAsync?.({
-      content: {
-        title: 'Jarvis przypomina',
-        body: `${item.start} • ${item.title}${item.location ? ` • ${item.location}` : ''}`,
-        data: { jarvisKey: `${JARVIS_NOTIFICATION_PREFIX}${dayIso}-${item.id}`, itemId: item.id },
-        sound: true,
-      },
-      trigger: Platform.OS === 'android'
-        ? { channelId: 'jarvis-reminders', type: Notifications.SchedulableTriggerInputTypes?.DATE, date: notifyAt }
-        : { type: Notifications.SchedulableTriggerInputTypes?.DATE, date: notifyAt },
-    });
-  }
-  return count;
-}
-
-async function saveSettings(next: SettingsState) {
-  if (!AsyncStorage) return;
-  try { await AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(next)); } catch {}
-}
-
-async function loadSavedSettings(): Promise<SettingsState | null> {
-  if (!AsyncStorage) return null;
-  try {
-    const raw = await AsyncStorage.getItem(STORAGE_KEY);
-    if (!raw) return null;
-    return { ...DEFAULT_SETTINGS, ...JSON.parse(raw) };
+    return require("expo-notifications");
   } catch {
     return null;
   }
-}
+})();
 
-async function loadBrainNotes(): Promise<BrainNote[]> {
-  if (!AsyncStorage) return [];
+const SpeechLib: any = (() => {
   try {
-    const raw = await AsyncStorage.getItem(BRAIN_NOTES_KEY);
-    if (!raw) return [];
-    const parsed = JSON.parse(raw);
-    return Array.isArray(parsed) ? parsed : [];
+    return require("expo-speech-recognition");
   } catch {
-    return [];
+    return null;
   }
+})();
+
+const SpeechModule: any =
+  SpeechLib?.ExpoSpeechRecognitionModule || SpeechLib?.default || SpeechLib || null;
+
+if (Notifications?.setNotificationHandler) {
+  Notifications.setNotificationHandler({
+    handleNotification: async () => ({
+      shouldShowAlert: true,
+      shouldPlaySound: false,
+      shouldSetBadge: false,
+    }),
+  });
 }
 
-async function saveBrainNotes(notes: BrainNote[]) {
-  if (!AsyncStorage) return;
-  try { await AsyncStorage.setItem(BRAIN_NOTES_KEY, JSON.stringify(notes)); } catch {}
+type TabKey = "home" | "chat" | "plan" | "brain" | "inbox" | "settings";
+type VoiceTarget = "chat" | "inbox";
+type ChatMessage = {
+  role: "assistant" | "user";
+  text: string;
+  meta?: string;
+  error?: boolean;
+};
+
+const STORAGE_BACKEND_URL = "jarvis_backend_url_v7";
+const STORAGE_NOTIFY = "jarvis_notify_enabled_v7";
+const STORAGE_VOICE_AUTOSEND = "jarvis_voice_autosend_v7";
+const DEFAULT_BACKEND_URL = "http://192.168.8.118:8011";
+
+function cleanUrl(url: string) {
+  return url.trim().replace(/\/+$/, "");
 }
 
-async function startVoiceCapture(options: {
-  onStart?: () => void;
-  onPartial?: (text: string) => void;
-  onResult: (text: string) => void;
-  onError: (message: string) => void;
-  onEnd?: () => void;
-}) {
-  if (!SpeechRecognitionModule) {
-    options.onError('Ten build nie ma jeszcze natywnego modułu voice capture. Uruchom development build przez npx expo run:android.');
-    return () => {};
-  }
-  if (typeof SpeechRecognitionModule.isRecognitionAvailable === 'function' && !SpeechRecognitionModule.isRecognitionAvailable()) {
-    options.onError('Rozpoznawanie mowy nie jest dostępne na tym urządzeniu albo usługa rozpoznawania jest wyłączona.');
-    return () => {};
-  }
-
-  const subscriptions: Array<{ remove?: () => void } | undefined> = [];
-  let finished = false;
-
-  const cleanup = (shouldStop = true) => {
-    if (finished) return;
-    finished = true;
-    for (const sub of subscriptions) {
-      try { sub?.remove?.(); } catch {}
-    }
-    if (shouldStop) {
-      try { SpeechRecognitionModule.stop?.(); } catch {}
-    }
-  };
-
+function tryJson(text: string) {
   try {
-    const permissionResult = await (SpeechRecognitionModule.requestPermissionsAsync?.() ?? SpeechRecognitionModule.requestMicrophonePermissionsAsync?.());
-    if (permissionResult && permissionResult.granted === false) {
-      options.onError('Brak zgody na mikrofon lub rozpoznawanie mowy. Nadaj uprawnienia w telefonie i spróbuj ponownie.');
-      return () => {};
-    }
-
-    const partialHandler = (event: any) => {
-      const transcript = event?.results?.[0]?.transcript || event?.transcript || '';
-      if (transcript) options.onPartial?.(String(transcript));
-    };
-    const resultHandler = (event: any) => {
-      const transcript =
-        event?.results?.[0]?.transcript ||
-        event?.result ||
-        event?.transcript ||
-        (Array.isArray(event?.results) ? event.results.map((x: any) => x?.transcript || x).join(' ') : '');
-      if (transcript) {
-        options.onResult(String(transcript));
-        cleanup(true);
-      }
-    };
-    const errorHandler = (event: any) => {
-      const code = String(event?.error || '').toLowerCase();
-      if (code === 'aborted') {
-        cleanup(false);
-        options.onEnd?.();
-        return;
-      }
-      options.onError(String(event?.message || event?.error || 'Błąd rozpoznawania mowy.'));
-      cleanup(false);
-    };
-    const endHandler = () => {
-      cleanup(false);
-      options.onEnd?.();
-    };
-    const noMatchHandler = () => {
-      options.onError('Nie udało się rozpoznać wypowiedzi. Spróbuj jeszcze raz i mów trochę wolniej.');
-      cleanup(false);
-    };
-
-    subscriptions.push(SpeechRecognitionModule.addListener?.('start', options.onStart));
-    subscriptions.push(SpeechRecognitionModule.addListener?.('audiostart', options.onStart));
-    subscriptions.push(SpeechRecognitionModule.addListener?.('volumechange', partialHandler));
-    subscriptions.push(SpeechRecognitionModule.addListener?.('result', resultHandler));
-    subscriptions.push(SpeechRecognitionModule.addListener?.('partialresult', partialHandler));
-    subscriptions.push(SpeechRecognitionModule.addListener?.('error', errorHandler));
-    subscriptions.push(SpeechRecognitionModule.addListener?.('end', endHandler));
-    subscriptions.push(SpeechRecognitionModule.addListener?.('nomatch', noMatchHandler));
-
-    await SpeechRecognitionModule.start?.({
-      lang: 'pl-PL',
-      interimResults: true,
-      continuous: false,
-      maxAlternatives: 1,
-      requiresOnDeviceRecognition: false,
-    });
-
-    return () => cleanup(true);
-  } catch (error) {
-    cleanup(false);
-    options.onError(humanizeFetchError(error));
-    return () => {};
+    return JSON.parse(text);
+  } catch {
+    return text;
   }
 }
 
-function SectionCard({ title, subtitle, right, children }: { title: string; subtitle?: string; right?: React.ReactNode; children: React.ReactNode }) {
+function extractText(payload: any): string {
+  if (!payload) return "Brak odpowiedzi.";
+  const candidates = [
+    payload.reply,
+    payload.response,
+    payload.answer,
+    payload.message,
+    payload.content,
+    payload.text,
+    payload?.data?.reply,
+    payload?.data?.response,
+  ];
+  for (const c of candidates) {
+    if (typeof c === "string" && c.trim()) return c.trim();
+  }
+  if (typeof payload === "string" && payload.trim()) return payload.trim();
+  return "Odpowiedź w nieoczekiwanym formacie.";
+}
+
+function prettyTime(value: any) {
+  if (!value) return "—";
+  if (typeof value !== "string") return String(value);
+  const m = value.match(/(\d{2}:\d{2})/);
+  return m ? m[1] : value;
+}
+
+function parseTranscriptFromEvent(event: any): string {
+  if (!event) return "";
+  if (typeof event?.transcript === "string") return event.transcript;
+  if (typeof event?.result === "string") return event.result;
+  if (typeof event?.value === "string") return event.value;
+  const first = event?.results?.[0];
+  if (typeof first?.transcript === "string") return first.transcript;
+  if (typeof first === "string") return first;
+  return "";
+}
+
+function isExplicitTaskCommand(text: string) {
+  const lower = text.toLowerCase().trim();
   return (
-    <View style={styles.card}>
-      <View style={styles.sectionTop}>
-        <View style={styles.sectionTopText}>
-          <Text style={styles.sectionTitle}>{title}</Text>
-          {subtitle ? <Text style={styles.sectionSubtitle}>{subtitle}</Text> : null}
-        </View>
-        {right ? <View>{right}</View> : null}
-      </View>
-      {children}
-    </View>
+    lower.startsWith("dodaj ") ||
+    lower.startsWith("ustaw ") ||
+    lower.startsWith("zaplanuj ") ||
+    lower.startsWith("jutro ") ||
+    lower.startsWith("dziś ") ||
+    lower.startsWith("dzis ") ||
+    lower.startsWith("pojutrze ")
   );
 }
 
-function Chip({ text, active = false, danger = false }: { text: string; active?: boolean; danger?: boolean }) {
-  return <View style={[styles.chip, active && styles.chipActive, danger && styles.chipDanger]}><Text style={[styles.chipText, active && styles.chipTextActive, danger && styles.chipTextDanger]}>{text}</Text></View>;
+function summarizeDay(items: any[], label: string): string {
+  if (!items?.length) return `${label}: brak pozycji do pokazania.`;
+  const first = items[0];
+  return `${label}: ${items.length} pozycji. Najbliżej: ${prettyTime(
+    first?.time || first?.start
+  )} ${first?.title || first?.name || first?.text || "pozycja"}.`;
 }
 
-function MiniStat({ label, value, accent }: { label: string; value: string; accent?: string }) {
-  return <View style={styles.miniStat}><Text style={[styles.miniStatValue, accent ? { color: accent } : null]}>{value}</Text><Text style={styles.miniStatLabel}>{label}</Text></View>;
-}
-
-function ToggleCard({ label, value, onPress }: { label: string; value: boolean; onPress: () => void }) {
-  return (
-    <Pressable style={[styles.toggleCard, value && styles.toggleCardActive]} onPress={onPress}>
-      <Text style={styles.toggleLabel}>{label}</Text>
-      <Chip text={value ? 'ON' : 'OFF'} active={value} />
-    </Pressable>
-  );
-}
-
-function TimelineList({ items, emptyText }: { items: TimelineItem[]; emptyText: string }) {
-  if (!items.length) return <Text style={styles.emptyText}>{emptyText}</Text>;
-  return (
-    <View style={styles.columnGap}>
-      {items.map((item) => (
-        <View key={item.id} style={styles.timelineRow}>
-          <View style={styles.timelineTimeBlock}>
-            <Text style={styles.timelineTime}>{item.start}</Text>
-            <Text style={styles.timelineTimeEnd}>{item.end}</Text>
-          </View>
-          <View style={[styles.timelineDot, item.kind === 'focus' ? styles.focusDot : item.kind === 'lunch' ? styles.lunchDot : null]} />
-          <View style={styles.timelineBody}>
-            <Text style={styles.timelineTitle}>{item.title}</Text>
-            <Text style={styles.timelineMeta}>{[item.kind, item.category, item.location].filter(Boolean).join(' • ') || 'bez szczegółów'}</Text>
-          </View>
-        </View>
-      ))}
-    </View>
-  );
-}
-
-function PriorityList({ items, emptyText }: { items: DayPayload['priorities']; emptyText: string }) {
-  if (!items.length) return <Text style={styles.emptyText}>{emptyText}</Text>;
-  return (
-    <View style={styles.columnGap}>
-      {items.map((item, index) => (
-        <View key={`${item.title}-${index}`} style={styles.priorityRow}>
-          <View style={styles.priorityBadge}><Text style={styles.priorityBadgeText}>P{item.priority}</Text></View>
-          <View style={styles.priorityBody}>
-            <Text style={styles.priorityTitle}>{item.title}</Text>
-            <Text style={styles.priorityMeta}>{[item.time || 'bez godziny', item.category, item.kind].filter(Boolean).join(' • ')}</Text>
-          </View>
-        </View>
-      ))}
-    </View>
-  );
-}
-
-function QuickPromptRow({ items, onPress }: { items: string[]; onPress: (value: string) => void }) {
-  return (
-    <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.quickRow}>
-      {items.map((item) => (
-        <Pressable key={item} style={styles.quickButton} onPress={() => onPress(item)}><Text style={styles.quickButtonText}>{item}</Text></Pressable>
-      ))}
-    </ScrollView>
-  );
-}
-
-function VoicePill({ voiceState }: { voiceState: VoiceState }) {
-  if (!voiceState.listening && !voiceState.liveText && !voiceState.error) return null;
-  return (
-    <View style={[styles.voiceLiveCard, voiceState.error ? styles.voiceLiveCardError : null]}>
-      <Text style={styles.voiceLiveTitle}>{voiceState.listening ? '🎤 Słucham...' : voiceState.error ? 'Błąd voice capture' : 'Transkrypcja'}</Text>
-      <Text style={styles.voiceLiveText}>{voiceState.error || voiceState.liveText || 'Powiedz komendę do Jarvisa.'}</Text>
-    </View>
-  );
-}
-
-function NoteList({ notes, onTogglePin, onDelete }: { notes: BrainNote[]; onTogglePin: (id: string) => void; onDelete: (id: string) => void }) {
-  if (!notes.length) return <Text style={styles.emptyText}>Brak zapisanych myśli. Dodaj pierwszą notatkę z Brain, Chatu albo Inboxa.</Text>;
-  return (
-    <View style={styles.columnGap}>
-      {notes.map((note) => (
-        <View key={note.id} style={styles.noteCard}>
-          <View style={styles.noteTopRow}>
-            <View style={{ flex: 1 }}>
-              <Text style={styles.noteTitle}>{note.title}</Text>
-              <Text style={styles.noteMeta}>{new Date(note.createdAt).toLocaleString('pl-PL')} • {note.source}</Text>
-            </View>
-            {note.pinned ? <Chip text="PIN" active /> : null}
-          </View>
-          <Text style={styles.noteText}>{notePreview(note)}</Text>
-          <View style={styles.noteTagsWrap}>
-            {note.tags.map((tag) => <Chip key={`${note.id}-${tag}`} text={`#${tag}`} />)}
-          </View>
-          <View style={styles.inlineActionsWrap}>
-            <Pressable style={styles.secondaryButton} onPress={() => onTogglePin(note.id)}><Text style={styles.secondaryButtonText}>{note.pinned ? 'Odepnij' : 'Przypnij'}</Text></Pressable>
-            <Pressable style={styles.secondaryDangerButton} onPress={() => onDelete(note.id)}><Text style={styles.secondaryDangerButtonText}>Usuń</Text></Pressable>
-          </View>
-        </View>
-      ))}
-    </View>
-  );
-}
-
-function HomeScreen({
-  settings,
-  notes,
-  onOpenTab,
-  onUseCapture,
-  onUseChat,
-  onQuickPlan,
-}: {
-  settings: SettingsState;
-  notes: BrainNote[];
-  onOpenTab: (tab: TabKey) => void;
-  onUseCapture: (value: string) => void;
-  onUseChat: (value: string) => void;
-  onQuickPlan: () => void;
-}) {
-  const [today, setToday] = useState<DayPayload>(EMPTY_DAY);
-  const [tomorrow, setTomorrow] = useState<DayPayload>(EMPTY_DAY);
-  const [health, setHealth] = useState<HealthResponse | null>(null);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState('');
-
-  const pinned = useMemo(() => notes.filter((n) => n.pinned).slice(0, 2), [notes]);
-
-  const load = useCallback(async () => {
-    setLoading(true); setError('');
-    try {
-      const [healthData, todayData, tomorrowData] = await Promise.all([
-        apiGet<HealthResponse>(settings, '/mobile/health'),
-        apiGet<DayPayload>(settings, '/mobile/today'),
-        apiGet<DayPayload>(settings, '/mobile/tomorrow'),
-      ]);
-      setHealth(healthData); setToday(todayData); setTomorrow(tomorrowData);
-    } catch (err) { setError(humanizeFetchError(err)); }
-    finally { setLoading(false); }
-  }, [settings]);
-
-  useEffect(() => { load(); }, [load]);
-
-  return (
-    <ScrollView style={styles.screenFill} contentContainerStyle={styles.screenContent}>
-      <View style={styles.heroCard}>
-        <Text style={styles.heroEyebrow}>Jarvis Mobile v5</Text>
-        <Text style={styles.heroTitle}>REAL Second Brain</Text>
-        <Text style={styles.heroText}>Organizer, AI planner dnia, pamięć, priorytety, voice capture i lokalny second brain w jednym stabilnym ekranie mobilnym.</Text>
-        <View style={styles.heroStats}>
-          <MiniStat label="status" value={health?.status || '—'} accent={statusColor(health?.status)} />
-          <MiniStat label="dziś" value={String(today.timeline.length)} />
-          <MiniStat label="brain" value={String(notes.length)} />
-        </View>
-      </View>
-
-      <SectionCard title="Co teraz najważniejsze?" subtitle="centrum dowodzenia dla Twojego dnia" right={loading ? <ActivityIndicator color={colors.primary} /> : null}>
-        {error ? <Text style={styles.errorText}>{error}</Text> : null}
-        <Text style={styles.homeFocusTitle}>{today.summary.next_item || 'Brak pozycji do pokazania'}</Text>
-        <Text style={styles.homeFocusMeta}>Najbliższy punkt: {today.summary.next_time || '—'} • {formatDayLabel(today.date)}</Text>
-        <View style={styles.inlineActionsWrap}>
-          <Pressable style={styles.primaryButton} onPress={onQuickPlan}><Text style={styles.primaryButtonText}>AI planner jutra</Text></Pressable>
-          <Pressable style={styles.secondaryButton} onPress={() => onOpenTab('plan')}><Text style={styles.secondaryButtonText}>Plan dnia</Text></Pressable>
-          <Pressable style={styles.secondaryButton} onPress={() => onOpenTab('brain')}><Text style={styles.secondaryButtonText}>Otwórz Brain</Text></Pressable>
-        </View>
-      </SectionCard>
-
-      <SectionCard title="Szybki start" subtitle="najkrótsze drogi do działania">
-        <View style={styles.grid2}>
-          <Pressable style={styles.featureTile} onPress={() => onOpenTab('chat')}>
-            <Text style={styles.featureTitle}>AI Chat</Text>
-            <Text style={styles.featureText}>Pytaj Jarvisa o plan dnia, priorytety i pamięć.</Text>
-          </Pressable>
-          <Pressable style={styles.featureTile} onPress={() => onOpenTab('inbox')}>
-            <Text style={styles.featureTitle}>Voice Inbox</Text>
-            <Text style={styles.featureText}>Mów naturalnie: „jutro 9 dentysta”.</Text>
-          </Pressable>
-          <Pressable style={styles.featureTile} onPress={() => onUseCapture('pomysł: usprawnić onboarding Jarvisa')}>
-            <Text style={styles.featureTitle}>Capture myśli</Text>
-            <Text style={styles.featureText}>Wrzuć pomysł do Inboxa albo do Brain.</Text>
-          </Pressable>
-          <Pressable style={styles.featureTile} onPress={() => onUseChat('Co mam dziś najważniejsze?')}>
-            <Text style={styles.featureTitle}>Focus na dziś</Text>
-            <Text style={styles.featureText}>Jarvis zbierze plan dnia w jednym miejscu.</Text>
-          </Pressable>
-        </View>
-      </SectionCard>
-
-      <SectionCard title="Top priorytety jutra" subtitle={formatDayLabel(tomorrow.date)}>
-        <PriorityList items={tomorrow.priorities} emptyText="Brak priorytetów jutra." />
-      </SectionCard>
-
-      <SectionCard title="Pinned brain" subtitle="najważniejsze notatki drugiego mózgu" right={<Chip text={`${notes.length} notatek`} active />}>
-        {pinned.length ? <NoteList notes={pinned} onTogglePin={() => {}} onDelete={() => {}} /> : <Text style={styles.emptyText}>Przypnij ważne notatki w zakładce Brain, żeby zawsze były pod ręką.</Text>}
-      </SectionCard>
-    </ScrollView>
-  );
-}
-
-function ChatScreen({
-  settings,
-  seedMessage,
-  onMessageConsumed,
-  notes,
-  onAddBrainNote,
-}: {
-  settings: SettingsState;
-  seedMessage: string | null;
-  onMessageConsumed: () => void;
-  notes: BrainNote[];
-  onAddBrainNote: (note: BrainNote) => void;
-}) {
-  const [messages, setMessages] = useState<ChatMessage[]>([
-    {
-      id: uid('msg'),
-      role: 'assistant',
-      text: 'Jarvis Mobile v5 gotowy. Pytaj o plan, priorytety, pamięć, a ważne odpowiedzi zapisuj do Brain.',
-      intent: 'welcome',
-    },
-  ]);
-  const [text, setText] = useState('');
-  const [sending, setSending] = useState(false);
-  const [voiceState, setVoiceState] = useState<VoiceState>({ listening: false, liveText: '', error: '' });
-  const stopVoiceRef = useRef<null | (() => void)>(null);
-
-  const pinnedHint = useMemo(() => notes.filter((n) => n.pinned).slice(0, 2).map((n) => n.title).join(' • '), [notes]);
-
-  useEffect(() => {
-    if (seedMessage) {
-      setText(seedMessage);
-      onMessageConsumed();
-    }
-  }, [seedMessage, onMessageConsumed]);
-
-  useEffect(() => () => { stopVoiceRef.current?.(); }, []);
-
-  const send = useCallback(async (raw?: string) => {
-    const message = (raw ?? text).trim();
-    if (!message) return;
-    const userMessage: ChatMessage = { id: uid('msg'), role: 'user', text: message };
-    setMessages((prev) => [...prev, userMessage]);
-    setText('');
-    setSending(true);
-    try {
-      const result = await runChatIntent(settings, message);
-      const assistantMessage: ChatMessage = { id: uid('msg'), role: 'assistant', text: result.reply, intent: result.intent };
-      setMessages((prev) => [...prev, assistantMessage]);
-    } catch (err) {
-      setMessages((prev) => [...prev, { id: uid('msg'), role: 'assistant', text: humanizeFetchError(err), intent: 'error' }]);
-    } finally { setSending(false); }
-  }, [settings, text]);
-
-  const saveLastAssistantToBrain = useCallback(() => {
-    const lastAssistant = [...messages].reverse().find((item) => item.role === 'assistant');
-    if (!lastAssistant) {
-      Alert.alert('Jarvis', 'Najpierw uzyskaj odpowiedź od Jarvisa.');
-      return;
-    }
-    const note = createBrainNote({ title: `Chat: ${lastAssistant.intent || 'odpowiedź'}`, text: lastAssistant.text, source: 'chat', tags: ['chat', lastAssistant.intent || 'jarvis'] });
-    onAddBrainNote(note);
-    Alert.alert('Jarvis', 'Ostatnia odpowiedź została zapisana do Brain.');
-  }, [messages, onAddBrainNote]);
-
-  const startVoice = useCallback(async () => {
-    if (voiceState.listening) {
-      stopVoiceRef.current?.();
-      stopVoiceRef.current = null;
-      setVoiceState({ listening: false, liveText: '', error: '' });
-      return;
-    }
-    setVoiceState({ listening: true, liveText: '', error: '' });
-    stopVoiceRef.current = await startVoiceCapture({
-      onStart: () => setVoiceState({ listening: true, liveText: '', error: '' }),
-      onPartial: (value) => setVoiceState((prev) => ({ ...prev, liveText: value, error: '' })),
-      onResult: (value) => {
-        setVoiceState({ listening: false, liveText: value, error: '' });
-        setText(value);
-        send(value);
-      },
-      onError: (message) => setVoiceState({ listening: false, liveText: '', error: message }),
-      onEnd: () => setVoiceState((prev) => ({ ...prev, listening: false })),
-    });
-  }, [send, voiceState.listening]);
-
-  return (
-    <KeyboardAvoidingView style={styles.screenFill} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
-      <ScrollView style={styles.screenFill} contentContainerStyle={styles.screenContent}>
-        <Text style={styles.h1}>Chat</Text>
-        <Text style={styles.sub}>AI chat z kontekstem dnia, priorytetami i możliwością zapisu odpowiedzi do Brain.</Text>
-        {pinnedHint ? <Text style={styles.helperText}>Pinned context: {pinnedHint}</Text> : null}
-        <QuickPromptRow items={QUICK_CHAT} onPress={setText} />
-        <VoicePill voiceState={voiceState} />
-        <SectionCard title="Rozmowa" subtitle="pisz albo mów do Jarvisa" right={sending ? <ActivityIndicator color={colors.primary} /> : null}>
-          <View style={styles.columnGap}>
-            {messages.map((item) => (
-              <View key={item.id} style={item.role === 'assistant' ? styles.chatBubbleAssistant : styles.chatBubbleUser}>
-                <Text style={item.role === 'assistant' ? styles.chatRoleAssistant : styles.chatRoleUser}>{item.role === 'assistant' ? 'Jarvis' : 'Ty'}</Text>
-                <Text style={item.role === 'assistant' ? styles.chatTextAssistant : styles.chatTextUser}>{item.text}</Text>
-                {item.intent ? <Text style={styles.intentText}>intent: {item.intent}</Text> : null}
-              </View>
-            ))}
-          </View>
-        </SectionCard>
-      </ScrollView>
-
-      <View style={styles.composerWrap}>
-        <TextInput
-          value={text}
-          onChangeText={setText}
-          placeholder="Napisz do Jarvisa..."
-          placeholderTextColor={colors.muted}
-          multiline
-          style={styles.composerInput}
-        />
-        <View style={styles.inlineActionsWrap}>
-          <Pressable style={styles.primaryButton} onPress={() => send()}><Text style={styles.primaryButtonText}>{sending ? 'Wysyłanie...' : 'Wyślij'}</Text></Pressable>
-          <Pressable style={[styles.voiceButton, voiceState.listening && styles.voiceButtonActive]} onPress={startVoice}><Text style={styles.voiceButtonText}>{voiceState.listening ? '⏹ Stop' : '🎤 Mów'}</Text></Pressable>
-          <Pressable style={styles.secondaryButton} onPress={saveLastAssistantToBrain}><Text style={styles.secondaryButtonText}>Zapisz do Brain</Text></Pressable>
-        </View>
-      </View>
-    </KeyboardAvoidingView>
-  );
-}
-
-function PlanScreen({ settings, notificationsEnabled }: { settings: SettingsState; notificationsEnabled: boolean }) {
-  const [mode, setMode] = useState<PlanMode>('today');
-  const [today, setToday] = useState<DayPayload>(EMPTY_DAY);
-  const [tomorrow, setTomorrow] = useState<DayPayload>(EMPTY_DAY);
-  const [loading, setLoading] = useState(false);
-  const [message, setMessage] = useState('');
-  const [error, setError] = useState('');
-
-  const activePayload = mode === 'today' ? today : tomorrow;
-
-  const load = useCallback(async () => {
-    setLoading(true); setError(''); setMessage('');
-    try {
-      const [todayData, tomorrowData] = await Promise.all([
-        apiGet<DayPayload>(settings, '/mobile/today'),
-        apiGet<DayPayload>(settings, '/mobile/tomorrow'),
-      ]);
-      setToday(todayData); setTomorrow(tomorrowData);
-    } catch (err) {
-      setError(humanizeFetchError(err));
-    } finally {
-      setLoading(false);
-    }
-  }, [settings]);
-
-  useEffect(() => { load(); }, [load]);
-
-  const planTomorrow = useCallback(async () => {
-    setLoading(true); setError(''); setMessage('');
-    try {
-      const result = await apiPost<ActionResponse>(settings, '/mobile/plan/tomorrow');
-      const tomorrowData = await apiGet<DayPayload>(settings, '/mobile/tomorrow');
-      setTomorrow(tomorrowData);
-      let note = result.message || 'Plan jutra został zaktualizowany.';
-      if (notificationsEnabled) {
-        await clearJarvisNotifications();
-        const count = await scheduleTimelineNotifications(tomorrowData.date, tomorrowData.timeline);
-        note += count ? ` Przypomnienia: ${count}.` : ' Brak przyszłych przypomnień do ustawienia.';
-      }
-      setMode('tomorrow');
-      setMessage(note);
-    } catch (err) { setError(humanizeFetchError(err)); }
-    finally { setLoading(false); }
-  }, [notificationsEnabled, settings]);
-
-  return (
-    <ScrollView style={styles.screenFill} contentContainerStyle={styles.screenContent}>
-      <Text style={styles.h1}>Plan dnia</Text>
-      <Text style={styles.sub}>Timeline, wolne okna, AI planner jutra i lokalne przypomnienia 15 minut przed wydarzeniem.</Text>
-
-      <View style={styles.segmentWrap}>
-        <Pressable style={[styles.segmentButton, mode === 'today' && styles.segmentButtonActive]} onPress={() => setMode('today')}><Text style={[styles.segmentText, mode === 'today' && styles.segmentTextActive]}>Dziś</Text></Pressable>
-        <Pressable style={[styles.segmentButton, mode === 'tomorrow' && styles.segmentButtonActive]} onPress={() => setMode('tomorrow')}><Text style={[styles.segmentText, mode === 'tomorrow' && styles.segmentTextActive]}>Jutro</Text></Pressable>
-      </View>
-
-      <View style={styles.inlineActionsWrap}>
-        <Pressable style={styles.primaryButton} onPress={load}><Text style={styles.primaryButtonText}>{loading ? 'Odświeżam...' : 'Odśwież'}</Text></Pressable>
-        <Pressable style={styles.secondaryButton} onPress={planTomorrow}><Text style={styles.secondaryButtonText}>AI planner jutra</Text></Pressable>
-      </View>
-
-      {message ? <Text style={styles.okText}>{message}</Text> : null}
-      {error ? <Text style={styles.errorText}>{error}</Text> : null}
-
-      <SectionCard title={mode === 'today' ? 'Dziś' : 'Jutro'} subtitle={formatDayLabel(activePayload.date)} right={loading ? <ActivityIndicator color={colors.primary} /> : null}>
-        <Text style={styles.homeFocusTitle}>{activePayload.summary.next_item || 'Brak pozycji do pokazania'}</Text>
-        <Text style={styles.homeFocusMeta}>Najbliższy punkt: {activePayload.summary.next_time || '—'}</Text>
-      </SectionCard>
-
-      <SectionCard title="Timeline" subtitle="kalendarz + zadania + focus/lunch">
-        <TimelineList items={activePayload.timeline} emptyText="Brak elementów w planie." />
-      </SectionCard>
-
-      <SectionCard title="Wolne okna">
-        <Text style={styles.infoLine}>{activePayload.free_windows.length ? activePayload.free_windows.map((x) => `${x.start}–${x.end}`).join('  |  ') : 'Brak wolnych okien.'}</Text>
-      </SectionCard>
-
-      <SectionCard title="Priorytety w planie">
-        <PriorityList items={activePayload.priorities} emptyText="Brak priorytetów do pokazania." />
-      </SectionCard>
-    </ScrollView>
-  );
-}
-
-function BrainScreen({
-  settings,
-  notes,
-  onAddBrainNote,
-  onDeleteNote,
-  onTogglePin,
-}: {
-  settings: SettingsState;
-  notes: BrainNote[];
-  onAddBrainNote: (note: BrainNote) => void;
-  onDeleteNote: (id: string) => void;
-  onTogglePin: (id: string) => void;
-}) {
-  const [memoryText, setMemoryText] = useState('');
-  const [priorities, setPriorities] = useState<DayPayload['priorities']>([]);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState('');
-  const [draft, setDraft] = useState('');
-  const [draftTitle, setDraftTitle] = useState('');
-  const [draftTags, setDraftTags] = useState('brain, idea');
-  const [filter, setFilter] = useState('');
-
-  const filteredNotes = useMemo(() => {
-    const query = filter.trim().toLowerCase();
-    const sorted = [...notes].sort((a, b) => {
-      if (a.pinned && !b.pinned) return -1;
-      if (!a.pinned && b.pinned) return 1;
-      return b.createdAt.localeCompare(a.createdAt);
-    });
-    if (!query) return sorted;
-    return sorted.filter((note) => [note.title, note.text, note.tags.join(' ')].join(' ').toLowerCase().includes(query));
-  }, [notes, filter]);
-
-  const load = useCallback(async () => {
-    setLoading(true); setError('');
-    try {
-      const [memory, prioritiesData] = await Promise.all([
-        apiGet<MemoryResponse>(settings, '/mobile/memory'),
-        apiGet<{ status: string; date: string; priorities: DayPayload['priorities'] }>(settings, '/mobile/priorities/tomorrow'),
-      ]);
-      setMemoryText(memory.message || 'Brak danych z pamięci backendu.');
-      setPriorities(prioritiesData.priorities || []);
-    } catch (err) { setError(humanizeFetchError(err)); }
-    finally { setLoading(false); }
-  }, [settings]);
-
-  useEffect(() => { load(); }, [load]);
-
-  const saveNote = useCallback(() => {
-    if (!draft.trim()) {
-      Alert.alert('Jarvis', 'Najpierw wpisz treść notatki.');
-      return;
-    }
-    const note = createBrainNote({ title: draftTitle, text: draft, tags: parseTags(draftTags), source: 'manual' });
-    onAddBrainNote(note);
-    setDraft('');
-    setDraftTitle('');
-    Alert.alert('Jarvis', 'Notatka została dodana do Second Brain.');
-  }, [draft, draftTags, draftTitle, onAddBrainNote]);
-
-  return (
-    <ScrollView style={styles.screenFill} contentContainerStyle={styles.screenContent}>
-      <Text style={styles.h1}>Brain</Text>
-      <Text style={styles.sub}>Priorytety jutra, pamięć backendu i lokalny Second Brain do notatek, myśli i pomysłów.</Text>
-      <View style={styles.inlineActionsWrap}>
-        <Pressable style={styles.primaryButton} onPress={load}><Text style={styles.primaryButtonText}>{loading ? 'Odświeżam...' : 'Odśwież'}</Text></Pressable>
-        <Chip text={`${notes.length} notatek`} active />
-      </View>
-      {error ? <Text style={styles.errorText}>{error}</Text> : null}
-
-      <SectionCard title="Top priorytety jutra">
-        <PriorityList items={priorities} emptyText="Brak priorytetów jutra." />
-      </SectionCard>
-
-      <SectionCard title="Pamięć Jarvisa" subtitle="co backend o Tobie pamięta" right={loading ? <ActivityIndicator color={colors.primary} /> : null}>
-        <Text style={styles.memoryText}>{memoryText || 'Brak danych.'}</Text>
-      </SectionCard>
-
-      <SectionCard title="Dodaj do Second Brain" subtitle="zapisuj decyzje, wnioski, pomysły, zasady działania">
-        <TextInput value={draftTitle} onChangeText={setDraftTitle} placeholder="Tytuł notatki" placeholderTextColor={colors.muted} style={styles.textInput} />
-        <TextInput value={draftTags} onChangeText={setDraftTags} placeholder="tagi, np. praca, pomysł" placeholderTextColor={colors.muted} style={styles.textInput} />
-        <TextInput value={draft} onChangeText={setDraft} placeholder="Treść myśli lub wiedzy do zapamiętania" placeholderTextColor={colors.muted} multiline style={styles.largeInput} />
-        <Pressable style={styles.primaryButton} onPress={saveNote}><Text style={styles.primaryButtonText}>Dodaj notatkę</Text></Pressable>
-      </SectionCard>
-
-      <SectionCard title="Przeszukaj Brain">
-        <TextInput value={filter} onChangeText={setFilter} placeholder="szukaj po tytule, treści albo tagu" placeholderTextColor={colors.muted} style={styles.textInput} />
-        <NoteList notes={filteredNotes} onTogglePin={onTogglePin} onDelete={onDeleteNote} />
-      </SectionCard>
-    </ScrollView>
-  );
-}
-
-function InboxScreen({
-  settings,
-  seedCapture,
-  onCaptureConsumed,
-  voiceAutoSend,
-  autoplanAfterInbox,
-  onAddBrainNote,
-}: {
-  settings: SettingsState;
-  seedCapture: string | null;
-  onCaptureConsumed: () => void;
-  voiceAutoSend: boolean;
-  autoplanAfterInbox: boolean;
-  onAddBrainNote: (note: BrainNote) => void;
-}) {
-  const [text, setText] = useState('');
-  const [busy, setBusy] = useState(false);
-  const [voiceState, setVoiceState] = useState<VoiceState>({ listening: false, liveText: '', error: '' });
-  const stopVoiceRef = useRef<null | (() => void)>(null);
-
-  useEffect(() => {
-    if (seedCapture) {
-      setText(seedCapture);
-      onCaptureConsumed();
-    }
-  }, [seedCapture, onCaptureConsumed]);
-
-  useEffect(() => () => { stopVoiceRef.current?.(); }, []);
-
-  const submitInbox = useCallback(async (raw?: string) => {
-    const value = (raw ?? text).trim();
-    if (!value) {
-      Alert.alert('Jarvis', 'Wpisz albo powiedz coś do Inboxa.');
-      return;
-    }
-    setBusy(true);
-    try {
-      const result = await apiPost<ActionResponse>(settings, '/mobile/inbox', { text: value });
-      let body = result.message || 'Dodano do inboxa.';
-      if (autoplanAfterInbox) {
-        const planner = await apiPost<ActionResponse>(settings, '/mobile/plan/tomorrow');
-        body += `\n\nAI planner: ${planner.message || 'zaktualizowano jutro.'}`;
-      }
-      Alert.alert('Jarvis', body);
-      setText('');
-    } catch (err) {
-      Alert.alert('Jarvis', humanizeFetchError(err));
-    } finally { setBusy(false); }
-  }, [autoplanAfterInbox, settings, text]);
-
-  const saveThought = useCallback(() => {
-    if (!text.trim()) {
-      Alert.alert('Jarvis', 'Najpierw wpisz myśl do zapisania.');
-      return;
-    }
-    const note = createBrainNote({ text, tags: ['capture', 'brain'], source: 'inbox' });
-    onAddBrainNote(note);
-    setText('');
-    Alert.alert('Jarvis', 'Myśl została zapisana do Brain bez wrzucania do Inboxa.');
-  }, [onAddBrainNote, text]);
-
-  const startVoice = useCallback(async () => {
-    if (voiceState.listening) {
-      stopVoiceRef.current?.();
-      stopVoiceRef.current = null;
-      setVoiceState({ listening: false, liveText: '', error: '' });
-      return;
-    }
-    setVoiceState({ listening: true, liveText: '', error: '' });
-    stopVoiceRef.current = await startVoiceCapture({
-      onStart: () => setVoiceState({ listening: true, liveText: '', error: '' }),
-      onPartial: (value) => setVoiceState((prev) => ({ ...prev, liveText: value, error: '' })),
-      onResult: (value) => {
-        setVoiceState({ listening: false, liveText: value, error: '' });
-        setText(value);
-        if (voiceAutoSend) submitInbox(value);
-      },
-      onError: (message) => setVoiceState({ listening: false, liveText: '', error: message }),
-      onEnd: () => setVoiceState((prev) => ({ ...prev, listening: false })),
-    });
-  }, [submitInbox, voiceAutoSend, voiceState.listening]);
-
-  return (
-    <ScrollView style={styles.screenFill} contentContainerStyle={styles.screenContent}>
-      <Text style={styles.h1}>Inbox</Text>
-      <Text style={styles.sub}>Szybki capture dla nowego zadania, wydarzenia albo myśli do Second Brain.</Text>
-      <SectionCard title="Wrzuć myśl do Jarvisa" subtitle="naturalny język, bez sztywnego formularza">
-        <QuickPromptRow items={QUICK_CAPTURE} onPress={setText} />
-        <VoicePill voiceState={voiceState} />
-        <TextInput value={text} onChangeText={setText} placeholder="Np. jutro 9 dentysta albo pomysł: uprościć onboarding" placeholderTextColor={colors.muted} multiline style={styles.largeInput} />
-        <View style={styles.inlineActionsWrap}>
-          <Pressable style={styles.primaryButton} onPress={() => submitInbox()}><Text style={styles.primaryButtonText}>{busy ? 'Dodaję...' : 'Dodaj do Inboxa'}</Text></Pressable>
-          <Pressable style={[styles.voiceButton, voiceState.listening && styles.voiceButtonActive]} onPress={startVoice}><Text style={styles.voiceButtonText}>{voiceState.listening ? '⏹ Stop' : '🎤 Mów'}</Text></Pressable>
-          <Pressable style={styles.secondaryButton} onPress={saveThought}><Text style={styles.secondaryButtonText}>Zapisz do Brain</Text></Pressable>
-        </View>
-      </SectionCard>
-
-      <SectionCard title="Tryb działania" subtitle="jak zachowuje się capture">
-        <Text style={styles.memoryText}>• Voice auto-send: {voiceAutoSend ? 'włączony' : 'wyłączony'}{`\n`}• Auto-plan po dodaniu do Inboxa: {autoplanAfterInbox ? 'włączony' : 'wyłączony'}</Text>
-      </SectionCard>
-    </ScrollView>
-  );
-}
-
-function SettingsScreen({ settings, onChange }: { settings: SettingsState; onChange: (next: SettingsState) => void }) {
-  const [testing, setTesting] = useState(false);
-  const [testResult, setTestResult] = useState('');
-
-  const testConnection = useCallback(async () => {
-    setTesting(true); setTestResult('');
-    try {
-      const health = await apiGet<HealthResponse>(settings, '/mobile/health');
-      setTestResult(`OK: ${health.product} ${health.version}`);
-    } catch (err) { setTestResult(humanizeFetchError(err)); }
-    finally { setTesting(false); }
-  }, [settings]);
-
-  const askNotificationPermission = useCallback(async () => {
-    try {
-      await ensureNotificationPermission();
-      Alert.alert('Jarvis', 'Powiadomienia włączone.');
-    } catch (err) {
-      Alert.alert('Jarvis', humanizeFetchError(err));
-    }
-  }, []);
-
-  return (
-    <ScrollView style={styles.screenFill} contentContainerStyle={styles.screenContent}>
-      <Text style={styles.h1}>Ustawienia</Text>
-      <Text style={styles.sub}>Backend, voice capture, powiadomienia i tryby działania drugiego mózgu.</Text>
-
-      <SectionCard title="Połączenie z backendem">
-        <Text style={styles.inputLabel}>Backend URL</Text>
-        <TextInput value={settings.apiBase} onChangeText={(value) => onChange({ ...settings, apiBase: value })} placeholder="http://192.168.x.x:8011" placeholderTextColor={colors.muted} autoCapitalize="none" autoCorrect={false} style={styles.textInput} />
-        <Text style={styles.inputLabel}>Opcjonalny token</Text>
-        <TextInput value={settings.apiToken} onChangeText={(value) => onChange({ ...settings, apiToken: value })} placeholder="zostaw puste, jeśli backend nie wymaga tokena" placeholderTextColor={colors.muted} autoCapitalize="none" autoCorrect={false} style={styles.textInput} />
-        <Text style={styles.helperText}>Na telefonie wpisuj IP komputera w tym samym Wi‑Fi, np. http://192.168.8.118:8011</Text>
-        <Pressable style={styles.primaryButton} onPress={testConnection}><Text style={styles.primaryButtonText}>{testing ? 'Testuję...' : 'Przetestuj połączenie'}</Text></Pressable>
-        {testing ? <ActivityIndicator color={colors.primary} /> : null}
-        {testResult ? <Text style={testResult.startsWith('OK:') ? styles.okText : styles.errorText}>{testResult}</Text> : null}
-      </SectionCard>
-
-      <SectionCard title="Tryby Jarvisa" subtitle="sterowanie aplikacją mobilną">
-        <ToggleCard label="Lokalne powiadomienia" value={settings.notificationsEnabled} onPress={() => onChange({ ...settings, notificationsEnabled: !settings.notificationsEnabled })} />
-        <ToggleCard label="Voice auto-send do Inbox" value={settings.voiceAutoSend} onPress={() => onChange({ ...settings, voiceAutoSend: !settings.voiceAutoSend })} />
-        <ToggleCard label="Auto-plan po dodaniu do Inboxa" value={settings.autoplanAfterInbox} onPress={() => onChange({ ...settings, autoplanAfterInbox: !settings.autoplanAfterInbox })} />
-        <Pressable style={styles.secondaryButton} onPress={askNotificationPermission}><Text style={styles.secondaryButtonText}>Nadaj zgodę na powiadomienia</Text></Pressable>
-      </SectionCard>
-
-      <SectionCard title="Co jest w v5?">
-        <Text style={styles.memoryText}>• Organizer: Home, Chat, Plan, Brain, Inbox, Ustawienia{`\n`}• AI Second Brain: lokalne notatki + pamięć backendu{`\n`}• AI planner dnia: planowanie jutra + przypomnienia{`\n`}• Voice capture: prawdziwy mikrofon w Chacie i Inboxie{`\n`}• Push notifications: lokalne przypomnienia 15 minut przed punktem planu</Text>
-      </SectionCard>
-    </ScrollView>
-  );
+function parseTaskMeta(text: string) {
+  const lower = text.toLowerCase();
+  const day = lower.includes("pojutrze")
+    ? "pojutrze"
+    : lower.includes("jutro")
+    ? "jutro"
+    : "dziś";
+  const tm = lower.match(/(\d{1,2})[:.]?(\d{2})?/);
+  const time = tm
+    ? `${String(Number(tm[1])).padStart(2, "0")}:${String(
+        Number(tm[2] || "0")
+      ).padStart(2, "0")}`
+    : "brak czasu";
+  return `${day} • ${time}`;
 }
 
 export default function App() {
-  const [activeTab, setActiveTab] = useState<TabKey>('home');
-  const [settings, setSettings] = useState<SettingsState>(DEFAULT_SETTINGS);
-  const [seedCapture, setSeedCapture] = useState<string | null>(null);
-  const [seedChat, setSeedChat] = useState<string | null>(null);
-  const [settingsLoaded, setSettingsLoaded] = useState(false);
-  const [brainNotes, setBrainNotes] = useState<BrainNote[]>([]);
+  const [tab, setTab] = useState<TabKey>("chat");
+  const [backendUrl, setBackendUrl] = useState(DEFAULT_BACKEND_URL);
+  const [backendDraft, setBackendDraft] = useState(DEFAULT_BACKEND_URL);
+
+  const [chatInput, setChatInput] = useState("");
+  const [chatLoading, setChatLoading] = useState(false);
+  const [chatMessages, setChatMessages] = useState<ChatMessage[]>([
+    {
+      role: "assistant",
+      text: "Jarvis v7 gotowy. Voice jest wpięty w Chat i Inbox.",
+      meta: "klik → słucham → input → opcjonalny auto-send",
+    },
+  ]);
+
+  const [inboxInput, setInboxInput] = useState("");
+  const [inboxLoading, setInboxLoading] = useState(false);
+  const [inboxStatus, setInboxStatus] = useState("");
+
+  const [todayItems, setTodayItems] = useState<any[]>([]);
+  const [tomorrowItems, setTomorrowItems] = useState<any[]>([]);
+  const [planLoading, setPlanLoading] = useState(false);
+  const [showTomorrow, setShowTomorrow] = useState(false);
+
+  const [priorities, setPriorities] = useState<any[]>([]);
+  const [brainLoading, setBrainLoading] = useState(false);
+  const [memoryText, setMemoryText] = useState("Brak pamięci do pokazania.");
+  const [plannerText, setPlannerText] = useState("Planner jeszcze nie został uruchomiony.");
+
+  const [healthStatus, setHealthStatus] = useState("Nie sprawdzano backendu.");
+  const [ollamaStatus, setOllamaStatus] = useState("Nie sprawdzano Ollamy.");
+  const [notifyEnabled, setNotifyEnabled] = useState(true);
+  const [voiceAutoSend, setVoiceAutoSend] = useState(false);
+
+  const [voiceListening, setVoiceListening] = useState(false);
+  const [voiceTarget, setVoiceTarget] = useState<VoiceTarget>("chat");
+  const [voiceStatus, setVoiceStatus] = useState("Voice gotowy.");
+  const transcriptRef = useRef("");
+  const subscriptionsRef = useRef<any[]>([]);
+  const scrollRef = useRef<ScrollView | null>(null);
+
+  const speechAvailable = useMemo(() => !!SpeechModule, []);
 
   useEffect(() => {
-    Promise.all([loadSavedSettings(), loadBrainNotes()]).then(([savedSettings, savedNotes]) => {
-      if (savedSettings) setSettings(savedSettings);
-      setBrainNotes(savedNotes || []);
-      setSettingsLoaded(true);
+    (async () => {
+      try {
+        const [savedUrl, savedNotify, savedAuto] = await Promise.all([
+          AsyncStorage.getItem(STORAGE_BACKEND_URL),
+          AsyncStorage.getItem(STORAGE_NOTIFY),
+          AsyncStorage.getItem(STORAGE_VOICE_AUTOSEND),
+        ]);
+        if (savedUrl?.trim()) {
+          setBackendUrl(savedUrl);
+          setBackendDraft(savedUrl);
+        }
+        if (savedNotify !== null) setNotifyEnabled(savedNotify === "true");
+        if (savedAuto !== null) setVoiceAutoSend(savedAuto === "true");
+      } catch {}
+
+      try {
+        await Notifications?.requestPermissionsAsync?.();
+      } catch {}
+    })();
+  }, []);
+
+  useEffect(() => {
+    const t = setTimeout(() => {
+      scrollRef.current?.scrollToEnd({ animated: true });
+    }, 80);
+    return () => clearTimeout(t);
+  }, [chatMessages]);
+
+  useEffect(() => {
+    return () => cleanupSpeechListeners();
+  }, []);
+
+  function cleanupSpeechListeners() {
+    subscriptionsRef.current.forEach((sub) => {
+      try {
+        sub?.remove?.();
+      } catch {}
     });
-  }, []);
-
-  useEffect(() => { if (settingsLoaded) saveSettings(settings); }, [settings, settingsLoaded]);
-  useEffect(() => { if (settingsLoaded) saveBrainNotes(brainNotes); }, [brainNotes, settingsLoaded]);
-
-  const title = activeTab === 'home' ? 'Dashboard' : activeTab === 'chat' ? 'Chat' : activeTab === 'plan' ? 'Plan dnia' : activeTab === 'brain' ? 'Brain' : activeTab === 'inbox' ? 'Inbox' : 'Ustawienia';
-
-  const openCapture = useCallback((value: string) => { setSeedCapture(value); setActiveTab('inbox'); }, []);
-  const openChat = useCallback((value: string) => { setSeedChat(value); setActiveTab('chat'); }, []);
-  const consumeCapture = useCallback(() => setSeedCapture(null), []);
-  const consumeChat = useCallback(() => setSeedChat(null), []);
-
-  const addBrainNote = useCallback((note: BrainNote) => {
-    setBrainNotes((prev) => [note, ...prev]);
-  }, []);
-
-  const deleteBrainNote = useCallback((id: string) => {
-    setBrainNotes((prev) => prev.filter((note) => note.id !== id));
-  }, []);
-
-  const togglePinBrainNote = useCallback((id: string) => {
-    setBrainNotes((prev) => prev.map((note) => note.id === id ? { ...note, pinned: !note.pinned } : note));
-  }, []);
-
-  const quickPlan = useCallback(async () => {
-    try {
-      const result = await apiPost<ActionResponse>(settings, '/mobile/plan/tomorrow');
-      let extra = '';
-      if (settings.notificationsEnabled) {
-        const tomorrow = await apiGet<DayPayload>(settings, '/mobile/tomorrow');
-        await clearJarvisNotifications();
-        const count = await scheduleTimelineNotifications(tomorrow.date, tomorrow.timeline);
-        extra = count ? `\nPrzypomnienia: ${count}` : '\nBrak przyszłych przypomnień.';
-      }
-      Alert.alert('Jarvis', `${result.message || 'Plan jutra zaktualizowany.'}${extra}`);
-      setActiveTab('plan');
-    } catch (err) {
-      Alert.alert('Jarvis', humanizeFetchError(err));
-    }
-  }, [settings]);
-
-  if (!settingsLoaded) {
-    return <SafeAreaView style={styles.safeArea}><View style={[styles.mainArea, styles.centered]}><ActivityIndicator color={colors.primary} /><Text style={styles.sub}>Ładuję ustawienia Jarvisa...</Text></View></SafeAreaView>;
+    subscriptionsRef.current = [];
   }
 
+  async function saveSettings(nextNotify = notifyEnabled, nextAuto = voiceAutoSend) {
+    try {
+      await Promise.all([
+        AsyncStorage.setItem(STORAGE_NOTIFY, String(nextNotify)),
+        AsyncStorage.setItem(STORAGE_VOICE_AUTOSEND, String(nextAuto)),
+      ]);
+    } catch {}
+  }
+
+  async function apiGet(path: string) {
+    const response = await fetch(`${cleanUrl(backendUrl)}${path}`);
+    const raw = await response.text();
+    const parsed = tryJson(raw);
+    if (!response.ok) {
+      throw new Error(typeof parsed === "string" ? parsed : `HTTP ${response.status}`);
+    }
+    return parsed;
+  }
+
+  async function apiPost(path: string, body: any) {
+    const response = await fetch(`${cleanUrl(backendUrl)}${path}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    const raw = await response.text();
+    const parsed = tryJson(raw);
+    if (!response.ok) {
+      throw new Error(typeof parsed === "string" ? parsed : `HTTP ${response.status}`);
+    }
+    return parsed;
+  }
+
+  async function saveBackend() {
+    const normalized = cleanUrl(backendDraft);
+    if (!normalized) {
+      Alert.alert("Błąd", "Backend URL nie może być pusty.");
+      return;
+    }
+    setBackendUrl(normalized);
+    try {
+      await AsyncStorage.setItem(STORAGE_BACKEND_URL, normalized);
+    } catch {}
+    setHealthStatus("Backend zapisany.");
+  }
+
+  async function testBackend() {
+    setHealthStatus("Sprawdzam...");
+    try {
+      const data = await apiGet("/mobile/health");
+      setHealthStatus(`OK: ${extractText(data)}`);
+    } catch (e: any) {
+      setHealthStatus(`Błąd backendu: ${e?.message || "nieznany błąd"}`);
+    }
+  }
+
+  async function testOllama() {
+    setOllamaStatus("Testuję...");
+    try {
+      const data = await apiPost("/mobile/ai/chat", {
+        message: "Napisz dokładnie: TEST OLLAMA DZIALA",
+      });
+      setOllamaStatus(`Odpowiedź AI: ${extractText(data)}`);
+    } catch (e: any) {
+      setOllamaStatus(`Błąd AI/Ollamy: ${e?.message || "nieznany błąd"}`);
+    }
+  }
+
+  async function loadPlan() {
+    setPlanLoading(true);
+    try {
+      const [today, tomorrow] = await Promise.allSettled([
+        apiGet("/mobile/today"),
+        apiGet("/mobile/tomorrow"),
+      ]);
+
+      if (today.status === "fulfilled") {
+        const items = Array.isArray(today.value?.items)
+          ? today.value.items
+          : Array.isArray(today.value?.timeline)
+          ? today.value.timeline
+          : [];
+        setTodayItems(items);
+      }
+
+      if (tomorrow.status === "fulfilled") {
+        const items = Array.isArray(tomorrow.value?.items)
+          ? tomorrow.value.items
+          : Array.isArray(tomorrow.value?.timeline)
+          ? tomorrow.value.timeline
+          : [];
+        setTomorrowItems(items);
+      }
+    } catch {
+      Alert.alert("Plan", "Nie udało się pobrać planu.");
+    } finally {
+      setPlanLoading(false);
+    }
+  }
+
+  async function loadBrain() {
+    setBrainLoading(true);
+    try {
+      const [prio, memory] = await Promise.allSettled([
+        apiGet("/mobile/priorities/tomorrow"),
+        apiGet("/mobile/memory"),
+      ]);
+      if (prio.status === "fulfilled") {
+        const items = Array.isArray(prio.value?.items)
+          ? prio.value.items
+          : Array.isArray(prio.value?.priorities)
+          ? prio.value.priorities
+          : [];
+        setPriorities(items);
+      }
+      if (memory.status === "fulfilled") {
+        setMemoryText(extractText(memory.value));
+      }
+    } finally {
+      setBrainLoading(false);
+    }
+  }
+
+  async function runPlanner() {
+    const base = showTomorrow ? tomorrowItems : todayItems;
+    if (!base.length) {
+      setPlannerText("Brak pozycji do zaplanowania. Dodaj coś do Inboxa.");
+      return;
+    }
+    const top = priorities[0]?.title || priorities[0]?.name || priorities[0]?.text || "brak";
+    setPlannerText(
+      [
+        `Top priorytet: ${top}`,
+        "",
+        ...base
+          .slice(0, 8)
+          .map(
+            (x) =>
+              `${prettyTime(x?.time || x?.start)} — ${x?.title || x?.name || x?.text || "pozycja"}`
+          ),
+      ].join("\n")
+    );
+  }
+
+  async function runChat(textOverride?: string) {
+    const text = (textOverride ?? chatInput).trim();
+    if (!text || chatLoading) return;
+
+    setChatMessages((prev) => [
+      ...prev,
+      {
+        role: "user",
+        text,
+        meta: isExplicitTaskCommand(text) ? `inbox-intent • ${parseTaskMeta(text)}` : "ai",
+      },
+    ]);
+    setChatInput("");
+    setChatLoading(true);
+
+    try {
+      if (text.toLowerCase().includes("co mam dziś") || text.toLowerCase().includes("co mam dzis")) {
+        if (!todayItems.length) await loadPlan();
+        setChatMessages((prev) => [
+          ...prev,
+          { role: "assistant", text: summarizeDay(todayItems, "Dziś"), meta: "plan/today" },
+        ]);
+      } else if (
+        text.toLowerCase().includes("plan jutra") ||
+        text.toLowerCase().includes("pokaż plan jutra")
+      ) {
+        if (!tomorrowItems.length) await loadPlan();
+        setChatMessages((prev) => [
+          ...prev,
+          { role: "assistant", text: summarizeDay(tomorrowItems, "Jutro"), meta: "plan/tomorrow" },
+        ]);
+      } else if (text.toLowerCase().includes("test ollama")) {
+        const data = await apiPost("/mobile/ai/chat", {
+          message: "Napisz dokładnie: TEST OLLAMA DZIALA",
+        });
+        setChatMessages((prev) => [
+          ...prev,
+          { role: "assistant", text: extractText(data), meta: "ollama-test" },
+        ]);
+      } else if (isExplicitTaskCommand(text)) {
+        const data = await apiPost("/mobile/inbox", { text });
+        setChatMessages((prev) => [
+          ...prev,
+          { role: "assistant", text: extractText(data), meta: `inbox • ${parseTaskMeta(text)}` },
+        ]);
+        await loadPlan();
+      } else {
+        const data = await apiPost("/mobile/ai/chat", { message: text });
+        setChatMessages((prev) => [...prev, { role: "assistant", text: extractText(data), meta: "ai" }]);
+      }
+    } catch (e: any) {
+      setChatMessages((prev) => [
+        ...prev,
+        {
+          role: "assistant",
+          text: `Błąd: ${e?.message || "nie udało się połączyć."}`,
+          meta: "error",
+          error: true,
+        },
+      ]);
+    } finally {
+      setChatLoading(false);
+    }
+  }
+
+  async function addInbox(textOverride?: string) {
+    const text = (textOverride ?? inboxInput).trim();
+    if (!text || inboxLoading) return;
+
+    setInboxLoading(true);
+    setInboxStatus("Dodaję...");
+    try {
+      const data = await apiPost("/mobile/inbox", { text });
+      const reply = extractText(data);
+      setInboxStatus(reply);
+      setInboxInput("");
+      setChatMessages((prev) => [
+        ...prev,
+        { role: "assistant", text: `Inbox: ${reply}`, meta: `inbox • ${parseTaskMeta(text)}` },
+      ]);
+      await loadPlan();
+
+      if (notifyEnabled) {
+        try {
+          await Notifications?.scheduleNotificationAsync?.({
+            content: { title: "Jarvis", body: text },
+            trigger: null,
+          });
+        } catch {}
+      }
+    } catch (e: any) {
+      setInboxStatus(`Błąd Inboxa: ${e?.message || "nieznany błąd"}`);
+    } finally {
+      setInboxLoading(false);
+    }
+  }
+
+  
+function smartParse(text: string) {
+  const lower = text.toLowerCase();
+  let date = "";
+  let time = "";
+
+  const now = new Date();
+
+  if (lower.includes("jutro")) {
+    const d = new Date(now);
+    d.setDate(d.getDate() + 1);
+    date = d.toISOString().split("T")[0];
+  } else if (lower.includes("pojutrze")) {
+    const d = new Date(now);
+    d.setDate(d.getDate() + 2);
+    date = d.toISOString().split("T")[0];
+  } else if (lower.includes("dziś") || lower.includes("dzis")) {
+    date = now.toISOString().split("T")[0];
+  }
+
+  if (lower.includes("rano")) time = "09:00";
+  if (lower.includes("po pracy")) time = "18:00";
+  if (lower.includes("wiecz")) time = "20:00";
+
+  const timeMatch = text.match(/(\d{1,2})[:.]?(\d{2})?/);
+  if (timeMatch) {
+    const h = timeMatch[1];
+    const m = timeMatch[2] || "00";
+    time = `${h.padStart(2,"0")}:${m}`;
+  }
+
+  return {
+    text,
+    date,
+    time,
+  };
+}
+
+
+function applyTranscript(text: string, target: VoiceTarget) {
+    if (!text.trim()) return;
+
+    if (target === "chat") {
+      setChatInput(text.trim());
+      if (voiceAutoSend) {
+        setVoiceStatus("Przetwarzam...");
+        setTimeout(() => runChat(text.trim()), 100);
+      } else {
+        setVoiceStatus("Gotowe.");
+      }
+    } else {
+      const parsed = smartParse(text.trim());
+      const finalText = parsed.text + (parsed.date ? ` | ${parsed.date}` : "") + (parsed.time ? ` ${parsed.time}` : "");
+      setInboxInput(finalText);
+      if (voiceAutoSend) {
+        setVoiceStatus("Przetwarzam...");
+        setTimeout(() => addInbox(finalText), 100);
+      } else {
+        setVoiceStatus("Gotowe.");
+      }
+    }
+  }
+
+  async function startVoice(target: VoiceTarget) {
+    if (!SpeechModule) {
+      Alert.alert(
+        "Voice",
+        "Brak expo-speech-recognition w tym buildzie. Uruchom development build po npx expo run:android."
+      );
+      return;
+    }
+
+    setVoiceTarget(target);
+    setVoiceStatus("Proszę o dostęp do mikrofonu...");
+    transcriptRef.current = "";
+    cleanupSpeechListeners();
+
+    try {
+      if (SpeechModule?.requestPermissionsAsync) {
+        const perm = await SpeechModule.requestPermissionsAsync();
+        const granted = perm === true || perm?.granted === true || perm?.status === "granted";
+        if (!granted) {
+          setVoiceStatus("Brak zgody na mikrofon.");
+          return;
+        }
+      }
+
+      if (SpeechModule?.addListener) {
+        subscriptionsRef.current.push(
+          SpeechModule.addListener("result", (event: any) => {
+            const transcript = parseTranscriptFromEvent(event);
+            if (transcript) {
+              transcriptRef.current = transcript;
+              setVoiceStatus(`Słucham... ${transcript}`);
+            }
+          })
+        );
+        subscriptionsRef.current.push(
+          SpeechModule.addListener("error", (event: any) => {
+            setVoiceStatus(`Voice error: ${event?.message || event?.error || "Błąd voice."}`);
+            setVoiceListening(false);
+          })
+        );
+        subscriptionsRef.current.push(
+          SpeechModule.addListener("end", () => {
+            const finalTranscript = transcriptRef.current.trim();
+            if (finalTranscript) {
+              applyTranscript(finalTranscript, target);
+            } else {
+              setVoiceStatus("Nie rozpoznałam wypowiedzi.");
+            }
+            setVoiceListening(false);
+            cleanupSpeechListeners();
+          })
+        );
+      }
+
+      setVoiceListening(true);
+      setVoiceStatus("Słucham...");
+
+      if (SpeechModule?.start) {
+        await SpeechModule.start({
+          lang: "pl-PL",
+          interimResults: true,
+          continuous: false,
+          maxAlternatives: 1,
+        });
+      } else if (SpeechModule?.startAsync) {
+        const result = await SpeechModule.startAsync({
+          lang: "pl-PL",
+          interimResults: false,
+        });
+        const transcript = result?.transcript || "";
+        if (transcript) {
+          applyTranscript(transcript, target);
+        } else {
+          setVoiceStatus("Nie rozpoznałam wypowiedzi.");
+        }
+        setVoiceListening(false);
+      } else {
+        setVoiceListening(false);
+        setVoiceStatus("Ten build nie expose'uje metody start.");
+      }
+    } catch (e: any) {
+      setVoiceListening(false);
+      setVoiceStatus(`Voice error: ${e?.message || "nie udało się uruchomić nasłuchu."}`);
+      cleanupSpeechListeners();
+    }
+  }
+
+  async function stopVoice() {
+    try {
+      setVoiceStatus("Przetwarzam...");
+      if (SpeechModule?.stop) await SpeechModule.stop();
+      if (SpeechModule?.stopAsync) await SpeechModule.stopAsync();
+    } catch {
+      setVoiceStatus("Nie udało się zatrzymać nasłuchu.");
+    }
+  }
+
+  const currentItems = showTomorrow ? tomorrowItems : todayItems;
+
   return (
-    <SafeAreaView style={styles.safeArea}>
-      <View style={styles.appHeader}>
-        <View>
-          <Text style={styles.appTitle}>Jarvis Mobile v5</Text>
-          <Text style={styles.appSubtitle}>{title}</Text>
+    <SafeAreaView style={styles.safe}>
+      <KeyboardAvoidingView
+        style={styles.safe}
+        behavior={Platform.OS === "ios" ? "padding" : undefined}
+      >
+        <View style={styles.header}>
+          <View>
+            <Text style={styles.brand}>Jarvis Mobile v7</Text>
+            <Text style={styles.subtitle}>Full app + voice in Chat and Inbox</Text>
+          </View>
+          <View style={styles.badge}>
+            <Text style={styles.badgeText}>stable</Text>
+          </View>
         </View>
-        <Chip text="stable" active />
-      </View>
-      <View style={styles.mainArea}>
-        {activeTab === 'home' ? <HomeScreen settings={settings} notes={brainNotes} onOpenTab={setActiveTab} onUseCapture={openCapture} onUseChat={openChat} onQuickPlan={quickPlan} /> : null}
-        {activeTab === 'chat' ? <ChatScreen settings={settings} seedMessage={seedChat} onMessageConsumed={consumeChat} notes={brainNotes} onAddBrainNote={addBrainNote} /> : null}
-        {activeTab === 'plan' ? <PlanScreen settings={settings} notificationsEnabled={settings.notificationsEnabled} /> : null}
-        {activeTab === 'brain' ? <BrainScreen settings={settings} notes={brainNotes} onAddBrainNote={addBrainNote} onDeleteNote={deleteBrainNote} onTogglePin={togglePinBrainNote} /> : null}
-        {activeTab === 'inbox' ? <InboxScreen settings={settings} seedCapture={seedCapture} onCaptureConsumed={consumeCapture} voiceAutoSend={settings.voiceAutoSend} autoplanAfterInbox={settings.autoplanAfterInbox} onAddBrainNote={addBrainNote} /> : null}
-        {activeTab === 'settings' ? <SettingsScreen settings={settings} onChange={setSettings} /> : null}
-      </View>
-      <View style={styles.tabBar}>
-        {[
-          { key: 'home', label: 'Home' },
-          { key: 'chat', label: 'Chat' },
-          { key: 'plan', label: 'Plan' },
-          { key: 'brain', label: 'Brain' },
-          { key: 'inbox', label: 'Inbox' },
-          { key: 'settings', label: 'Ustaw.' },
-        ].map((tab) => {
-          const isActive = activeTab === tab.key;
-          return (
-            <Pressable key={tab.key} style={[styles.tabButton, isActive && styles.tabButtonActive]} onPress={() => setActiveTab(tab.key as TabKey)}>
-              <Text style={[styles.tabButtonText, isActive && styles.tabButtonTextActive]}>{tab.label}</Text>
-            </Pressable>
-          );
-        })}
-      </View>
+
+        <View style={styles.content}>
+          {tab === "home" && (
+            <ScrollView contentContainerStyle={styles.screen}>
+              <View style={styles.card}>
+                <Text style={styles.screenTitle}>Home</Text>
+                <Text style={styles.screenLead}>
+                  Wracamy do pełnego Jarvisa: chat, inbox, plan, brain i voice.
+                </Text>
+                <View style={styles.actionRow}>
+                  <TouchableOpacity style={styles.primaryBtn} onPress={() => setTab("chat")}>
+                    <Text style={styles.primaryBtnText}>Otwórz Chat</Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity style={styles.secondaryBtn} onPress={() => setTab("inbox")}>
+                    <Text style={styles.secondaryBtnText}>Otwórz Inbox</Text>
+                  </TouchableOpacity>
+                </View>
+              </View>
+              <View style={styles.card}>
+                <Text style={styles.sectionTitle}>Dziś</Text>
+                <Text style={styles.body}>{summarizeDay(todayItems, "Dziś")}</Text>
+              </View>
+              <View style={styles.card}>
+                <Text style={styles.sectionTitle}>Jutro</Text>
+                <Text style={styles.body}>{summarizeDay(tomorrowItems, "Jutro")}</Text>
+              </View>
+            </ScrollView>
+          )}
+
+          {tab === "chat" && (
+            <View style={styles.flexScreen}>
+              <View style={styles.screenHeader}>
+                <Text style={styles.screenTitle}>Chat</Text>
+                <Text style={styles.screenLead}>
+                  Kliknij Voice → start nasłuchu → wynik wpada do inputa → opcjonalnie auto-send.
+                </Text>
+              </View>
+
+              <View style={styles.chatFrame}>
+                <ScrollView
+                  ref={scrollRef}
+                  style={styles.chatScroll}
+                  contentContainerStyle={styles.chatScrollContent}
+                  showsVerticalScrollIndicator
+                  persistentScrollbar
+                  indicatorStyle="white"
+                  keyboardShouldPersistTaps="handled"
+                >
+                  {chatMessages.map((m, i) => (
+                    <View
+                      key={`${i}-${m.role}`}
+                      style={[
+                        styles.bubble,
+                        m.role === "user" ? styles.userBubble : styles.assistantBubble,
+                        m.error ? styles.errorBubble : null,
+                      ]}
+                    >
+                      <Text style={styles.bubbleRole}>{m.role === "user" ? "Ty" : "Jarvis"}</Text>
+                      <Text style={styles.bubbleText}>{m.text}</Text>
+                      {m.meta ? <Text style={styles.bubbleMeta}>{m.meta}</Text> : null}
+                    </View>
+                  ))}
+
+                  {chatLoading && (
+                    <View style={[styles.bubble, styles.assistantBubble]}>
+                      <Text style={styles.bubbleRole}>Jarvis</Text>
+                      <View style={styles.loadingRow}>
+                        <ActivityIndicator color="#A7C4FF" />
+                        <Text style={styles.loadingText}>Jarvis myśli...</Text>
+                      </View>
+                    </View>
+                  )}
+                </ScrollView>
+              </View>
+
+              <View style={styles.inputDock}>
+                <TextInput
+                  style={styles.input}
+                  value={chatInput}
+                  onChangeText={setChatInput}
+                  placeholder="Napisz do Jarvisa..."
+                  placeholderTextColor="#7E93B9"
+                  multiline
+                  textAlignVertical="top"
+                  autoCapitalize="sentences"
+                />
+                <View style={styles.actionRow}>
+                  <TouchableOpacity style={styles.primaryBtnSmall} onPress={() => runChat()}>
+                    <Text style={styles.primaryBtnText}>Wyślij</Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity
+                    style={[
+                      styles.secondaryBtnSmall,
+                      voiceListening && voiceTarget === "chat" ? styles.stopBtn : null,
+                    ]}
+                    onPress={() =>
+                      voiceListening && voiceTarget === "chat" ? stopVoice() : startVoice("chat")
+                    }
+                  >
+                    <Text style={styles.secondaryBtnText}>
+                      {voiceListening && voiceTarget === "chat" ? "■ Stop" : "🎤 Voice"}
+                    </Text>
+                  </TouchableOpacity>
+                </View>
+                <Text style={styles.helper}>
+                  {speechAvailable ? voiceStatus : "Voice module nie znaleziony w tym buildzie."}
+                </Text>
+              </View>
+            </View>
+          )}
+
+          {tab === "plan" && (
+            <ScrollView contentContainerStyle={styles.screen}>
+              <View style={styles.card}>
+                <Text style={styles.screenTitle}>Plan</Text>
+                <Text style={styles.screenLead}>Dziś i jutro z backendu + planner AI.</Text>
+                <View style={styles.segmentWrap}>
+                  <TouchableOpacity
+                    style={[styles.segmentBtn, !showTomorrow && styles.segmentBtnActive]}
+                    onPress={() => setShowTomorrow(false)}
+                  >
+                    <Text style={[styles.segmentText, !showTomorrow && styles.segmentTextActive]}>Dziś</Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity
+                    style={[styles.segmentBtn, showTomorrow && styles.segmentBtnActive]}
+                    onPress={() => setShowTomorrow(true)}
+                  >
+                    <Text style={[styles.segmentText, showTomorrow && styles.segmentTextActive]}>Jutro</Text>
+                  </TouchableOpacity>
+                </View>
+                <View style={styles.actionRow}>
+                  <TouchableOpacity style={styles.primaryBtn} onPress={loadPlan}>
+                    <Text style={styles.primaryBtnText}>{planLoading ? "Ładuję..." : "Odśwież"}</Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity style={styles.secondaryBtn} onPress={runPlanner}>
+                    <Text style={styles.secondaryBtnText}>AI planner</Text>
+                  </TouchableOpacity>
+                </View>
+              </View>
+
+              <View style={styles.card}>
+                <Text style={styles.sectionTitle}>{showTomorrow ? "Jutro" : "Dziś"}</Text>
+                {currentItems.length ? (
+                  currentItems.map((item, idx) => (
+                    <View key={idx} style={styles.timelineRow}>
+                      <Text style={styles.timelineTime}>{prettyTime(item?.time || item?.start)}</Text>
+                      <View style={styles.timelineDot} />
+                      <View style={{ flex: 1 }}>
+                        <Text style={styles.timelineTitle}>
+                          {item?.title || item?.name || item?.text || "Pozycja"}
+                        </Text>
+                        <Text style={styles.timelineMeta}>{item?.type || item?.category || "item"}</Text>
+                      </View>
+                    </View>
+                  ))
+                ) : (
+                  <Text style={styles.body}>Brak pozycji do pokazania.</Text>
+                )}
+              </View>
+
+              <View style={styles.card}>
+                <Text style={styles.sectionTitle}>Planner dnia</Text>
+                <Text style={styles.body}>{plannerText}</Text>
+              </View>
+            </ScrollView>
+          )}
+
+          {tab === "brain" && (
+            <ScrollView contentContainerStyle={styles.screen}>
+              <View style={styles.card}>
+                <Text style={styles.screenTitle}>Brain</Text>
+                <Text style={styles.screenLead}>Priorytety i pamięć długoterminowa.</Text>
+                <View style={styles.actionRow}>
+                  <TouchableOpacity style={styles.primaryBtn} onPress={loadBrain}>
+                    <Text style={styles.primaryBtnText}>{brainLoading ? "Ładuję..." : "Odśwież"}</Text>
+                  </TouchableOpacity>
+                </View>
+              </View>
+
+              <View style={styles.card}>
+                <Text style={styles.sectionTitle}>Top priorytety jutra</Text>
+                {priorities.length ? (
+                  priorities.map((item, idx) => (
+                    <View key={idx} style={styles.priorityRow}>
+                      <View style={styles.priorityCircle}>
+                        <Text style={styles.priorityCircleText}>{item?.priority || idx + 1}</Text>
+                      </View>
+                      <View style={{ flex: 1 }}>
+                        <Text style={styles.timelineTitle}>
+                          {item?.title || item?.name || item?.text || "Priorytet"}
+                        </Text>
+                        <Text style={styles.timelineMeta}>{prettyTime(item?.time || item?.start)}</Text>
+                      </View>
+                    </View>
+                  ))
+                ) : (
+                  <Text style={styles.body}>Brak priorytetów jutra.</Text>
+                )}
+              </View>
+
+              <View style={styles.card}>
+                <Text style={styles.sectionTitle}>Pamięć Jarvisa</Text>
+                <Text style={styles.body}>{memoryText}</Text>
+              </View>
+            </ScrollView>
+          )}
+
+          {tab === "inbox" && (
+            <ScrollView contentContainerStyle={styles.screen}>
+              <View style={styles.card}>
+                <Text style={styles.screenTitle}>Inbox</Text>
+                <Text style={styles.screenLead}>
+                  Voice może wpisać komendę do inboxa i opcjonalnie od razu ją wysłać.
+                </Text>
+                <TextInput
+                  style={styles.input}
+                  value={inboxInput}
+                  onChangeText={setInboxInput}
+                  placeholder="Np. jutro 9:00 dentysta"
+                  placeholderTextColor="#7E93B9"
+                  multiline
+                />
+                <View style={styles.actionRow}>
+                  <TouchableOpacity style={styles.primaryBtnSmall} onPress={() => addInbox()}>
+                    <Text style={styles.primaryBtnText}>{inboxLoading ? "Dodaję..." : "Dodaj"}</Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity
+                    style={[
+                      styles.secondaryBtnSmall,
+                      voiceListening && voiceTarget === "inbox" ? styles.stopBtn : null,
+                    ]}
+                    onPress={() =>
+                      voiceListening && voiceTarget === "inbox" ? stopVoice() : startVoice("inbox")
+                    }
+                  >
+                    <Text style={styles.secondaryBtnText}>
+                      {voiceListening && voiceTarget === "inbox" ? "■ Stop" : "🎤 Voice"}
+                    </Text>
+                  </TouchableOpacity>
+                </View>
+                <Text style={styles.helper}>{inboxStatus || voiceStatus}</Text>
+              </View>
+            </ScrollView>
+          )}
+
+          {tab === "settings" && (
+            <ScrollView contentContainerStyle={styles.screen}>
+              <View style={styles.card}>
+                <Text style={styles.screenTitle}>Ustawienia</Text>
+                <Text style={styles.screenLead}>Backend, test Ollamy i konfiguracja voice.</Text>
+                <Text style={styles.label}>Backend URL</Text>
+                <TextInput
+                  style={styles.inputSingle}
+                  value={backendDraft}
+                  onChangeText={setBackendDraft}
+                  placeholder={DEFAULT_BACKEND_URL}
+                  placeholderTextColor="#7E93B9"
+                />
+                <View style={styles.actionRow}>
+                  <TouchableOpacity style={styles.primaryBtn} onPress={saveBackend}>
+                    <Text style={styles.primaryBtnText}>Zapisz</Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity style={styles.secondaryBtn} onPress={testBackend}>
+                    <Text style={styles.secondaryBtnText}>Test backendu</Text>
+                  </TouchableOpacity>
+                </View>
+                <Text style={styles.helper}>{healthStatus}</Text>
+              </View>
+
+              <View style={styles.card}>
+                <Text style={styles.sectionTitle}>Test Ollamy</Text>
+                <TouchableOpacity style={styles.primaryBtn} onPress={testOllama}>
+                  <Text style={styles.primaryBtnText}>Test Ollamy</Text>
+                </TouchableOpacity>
+                <Text style={styles.helper}>{ollamaStatus}</Text>
+              </View>
+
+              <View style={styles.card}>
+                <View style={styles.toggleRow}>
+                  <View style={{ flex: 1 }}>
+                    <Text style={styles.sectionTitle}>Lokalne powiadomienia</Text>
+                    <Text style={styles.small}>Przypomnienia po dodaniu do inboxa.</Text>
+                  </View>
+                  <Switch
+                    value={notifyEnabled}
+                    onValueChange={(v) => {
+                      setNotifyEnabled(v);
+                      saveSettings(v, voiceAutoSend);
+                    }}
+                  />
+                </View>
+
+                <View style={styles.toggleRow}>
+                  <View style={{ flex: 1 }}>
+                    <Text style={styles.sectionTitle}>Voice auto-send</Text>
+                    <Text style={styles.small}>Po rozpoznaniu od razu wysyła tekst.</Text>
+                  </View>
+                  <Switch
+                    value={voiceAutoSend}
+                    onValueChange={(v) => {
+                      setVoiceAutoSend(v);
+                      saveSettings(notifyEnabled, v);
+                    }}
+                  />
+                </View>
+
+                <Text style={styles.helper}>
+                  {speechAvailable
+                    ? "Voice module dostępny w tym buildzie."
+                    : "Voice module niewykryty. Uruchom npx expo run:android na telefonie."}
+                </Text>
+              </View>
+            </ScrollView>
+          )}
+        </View>
+
+        <View style={styles.tabBar}>
+          {[
+            ["home", "Home"],
+            ["chat", "Chat"],
+            ["plan", "Plan"],
+            ["brain", "Brain"],
+            ["inbox", "Inbox"],
+            ["settings", "Ustaw."],
+          ].map(([key, label]) => (
+            <TouchableOpacity
+              key={key}
+              style={[styles.tabBtn, tab === key && styles.tabBtnActive]}
+              onPress={() => setTab(key as TabKey)}
+            >
+              <Text style={[styles.tabText, tab === key && styles.tabTextActive]}>{label}</Text>
+            </TouchableOpacity>
+          ))}
+        </View>
+      </KeyboardAvoidingView>
     </SafeAreaView>
   );
 }
 
 const styles = StyleSheet.create({
-  safeArea: { flex: 1, backgroundColor: colors.bg },
-  screenFill: { flex: 1 },
-  appHeader: { paddingHorizontal: 16, paddingTop: 14, paddingBottom: 12, borderBottomWidth: 1, borderBottomColor: colors.border, backgroundColor: colors.surface, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
-  appTitle: { fontSize: 24, fontWeight: '800', color: colors.text },
-  appSubtitle: { marginTop: 2, fontSize: 13, color: colors.muted },
-  mainArea: { flex: 1 },
-  centered: { alignItems: 'center', justifyContent: 'center', gap: 12 },
-  screenContent: { padding: 16, rowGap: 16, paddingBottom: 24 },
-  h1: { fontSize: 28, fontWeight: '800', color: colors.text },
-  sub: { marginTop: -8, color: colors.muted, fontSize: 14 },
-  heroCard: { backgroundColor: colors.card2, borderRadius: 24, padding: 18, rowGap: 8, borderWidth: 1, borderColor: colors.border },
-  heroEyebrow: { color: '#BFDBFE', fontSize: 12, textTransform: 'uppercase', letterSpacing: 1 },
-  heroTitle: { color: colors.text, fontSize: 22, fontWeight: '800' },
-  heroText: { color: '#D6E3F5', lineHeight: 20 },
-  heroStats: { flexDirection: 'row', columnGap: 10, marginTop: 6 },
-  miniStat: { flex: 1, backgroundColor: 'rgba(15,23,42,0.45)', borderRadius: 18, paddingVertical: 12, paddingHorizontal: 10, borderWidth: 1, borderColor: colors.border },
-  miniStatValue: { color: colors.text, fontWeight: '800', fontSize: 16 },
-  miniStatLabel: { color: colors.muted, marginTop: 4, fontSize: 12 },
-  grid2: { flexDirection: 'row', flexWrap: 'wrap', gap: 10 },
-  featureTile: { width: '48%', backgroundColor: colors.card2, borderRadius: 18, padding: 14, borderWidth: 1, borderColor: colors.border, minHeight: 108, rowGap: 6 },
-  featureTitle: { color: colors.text, fontWeight: '800', fontSize: 16 },
-  featureText: { color: colors.muted, lineHeight: 18, fontSize: 13 },
-  card: { backgroundColor: colors.card, borderRadius: 22, borderWidth: 1, borderColor: colors.border, padding: 16, rowGap: 12 },
-  sectionTop: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start', columnGap: 12 },
-  sectionTopText: { flex: 1, rowGap: 4 },
-  sectionTitle: { color: colors.text, fontWeight: '800', fontSize: 16 },
-  sectionSubtitle: { color: colors.muted, fontSize: 13, lineHeight: 18 },
-  chip: { alignSelf: 'flex-start', paddingHorizontal: 12, paddingVertical: 8, borderRadius: 999, borderWidth: 1, borderColor: colors.border, backgroundColor: colors.chip },
-  chipActive: { backgroundColor: '#172554', borderColor: colors.primaryStrong },
-  chipDanger: { borderColor: '#7F1D1D', backgroundColor: '#2A0E12' },
-  chipText: { color: colors.muted, fontWeight: '700' },
-  chipTextActive: { color: colors.text },
-  chipTextDanger: { color: colors.danger },
-  quickRow: { columnGap: 10, paddingRight: 10 },
-  quickButton: { backgroundColor: '#111827', borderRadius: 999, borderWidth: 1, borderColor: colors.border, paddingHorizontal: 14, paddingVertical: 10 },
-  quickButtonText: { color: colors.text, fontWeight: '700' },
-  homeFocusTitle: { color: colors.text, fontWeight: '800', fontSize: 20 },
-  homeFocusMeta: { color: colors.muted, fontSize: 14 },
-  columnGap: { rowGap: 12 },
-  timelineRow: { flexDirection: 'row', columnGap: 10 },
-  timelineTimeBlock: { width: 56 },
-  timelineTime: { color: colors.text, fontWeight: '800' },
-  timelineTimeEnd: { color: colors.muted, fontSize: 12, marginTop: 2 },
-  timelineDot: { width: 10, height: 10, borderRadius: 5, backgroundColor: colors.primary, marginTop: 6 },
-  focusDot: { backgroundColor: colors.good },
-  lunchDot: { backgroundColor: colors.warning },
-  timelineBody: { flex: 1, rowGap: 2 },
-  timelineTitle: { color: colors.text, fontWeight: '700' },
-  timelineMeta: { color: colors.muted, fontSize: 12, lineHeight: 16 },
-  priorityRow: { flexDirection: 'row', columnGap: 10, alignItems: 'center' },
-  priorityBadge: { width: 42, height: 42, borderRadius: 21, backgroundColor: '#172554', borderWidth: 1, borderColor: colors.primaryStrong, alignItems: 'center', justifyContent: 'center' },
-  priorityBadgeText: { color: colors.text, fontWeight: '800' },
-  priorityBody: { flex: 1, rowGap: 2 },
-  priorityTitle: { color: colors.text, fontWeight: '700' },
-  priorityMeta: { color: colors.muted, fontSize: 12, lineHeight: 16 },
-  emptyText: { color: colors.muted, lineHeight: 20 },
-  inlineActionsWrap: { flexDirection: 'row', columnGap: 12, alignItems: 'center', flexWrap: 'wrap', rowGap: 12 },
-  primaryButton: { alignSelf: 'flex-start', backgroundColor: colors.primaryStrong, borderRadius: 999, paddingHorizontal: 18, paddingVertical: 12 },
-  primaryButtonText: { color: '#EFF6FF', fontWeight: '800', fontSize: 15 },
-  secondaryButton: { alignSelf: 'flex-start', backgroundColor: colors.card2, borderRadius: 999, paddingHorizontal: 18, paddingVertical: 12, borderWidth: 1, borderColor: colors.border },
-  secondaryButtonText: { color: colors.text, fontWeight: '800', fontSize: 15 },
-  secondaryDangerButton: { alignSelf: 'flex-start', backgroundColor: '#2A0E12', borderRadius: 999, paddingHorizontal: 18, paddingVertical: 12, borderWidth: 1, borderColor: '#7F1D1D' },
-  secondaryDangerButtonText: { color: '#FCA5A5', fontWeight: '800', fontSize: 15 },
-  voiceButton: { alignSelf: 'flex-start', backgroundColor: '#0F172A', borderRadius: 999, paddingHorizontal: 18, paddingVertical: 12, borderWidth: 1, borderColor: colors.border },
-  voiceButtonActive: { backgroundColor: '#172554', borderColor: colors.primaryStrong },
-  voiceButtonText: { color: colors.text, fontWeight: '800', fontSize: 15 },
-  voiceLiveCard: { backgroundColor: '#0F172A', borderRadius: 18, padding: 14, borderWidth: 1, borderColor: colors.border, rowGap: 6 },
-  voiceLiveCardError: { borderColor: '#7F1D1D', backgroundColor: '#2A0E12' },
-  voiceLiveTitle: { color: colors.text, fontWeight: '800' },
-  voiceLiveText: { color: '#D6E3F5', lineHeight: 20 },
-  composerWrap: { paddingHorizontal: 16, paddingTop: 12, paddingBottom: 14, borderTopWidth: 1, borderTopColor: colors.border, backgroundColor: colors.surface, rowGap: 12 },
-  composerInput: { minHeight: 88, maxHeight: 160, borderRadius: 20, backgroundColor: colors.card2, borderWidth: 1, borderColor: colors.border, color: colors.text, paddingHorizontal: 16, paddingVertical: 14, textAlignVertical: 'top' },
-  chatBubbleAssistant: { alignSelf: 'flex-start', maxWidth: '88%', backgroundColor: colors.card2, borderRadius: 24, padding: 16, rowGap: 8, borderWidth: 1, borderColor: colors.border },
-  chatBubbleUser: { alignSelf: 'flex-end', maxWidth: '88%', backgroundColor: colors.primaryStrong, borderRadius: 24, padding: 16, rowGap: 8 },
-  chatRoleAssistant: { color: '#CBD5E1', fontWeight: '800', fontSize: 13 },
-  chatRoleUser: { color: '#DBEAFE', fontWeight: '800', fontSize: 13 },
-  chatTextAssistant: { color: colors.text, fontSize: 15, lineHeight: 24 },
-  chatTextUser: { color: '#FFFFFF', fontSize: 15, lineHeight: 24 },
-  intentText: { color: '#93C5FD', fontSize: 12 },
-  segmentWrap: { flexDirection: 'row', backgroundColor: colors.card, borderRadius: 999, padding: 6, borderWidth: 1, borderColor: colors.border },
-  segmentButton: { flex: 1, borderRadius: 999, paddingVertical: 16, alignItems: 'center' },
-  segmentButtonActive: { backgroundColor: colors.primaryStrong },
-  segmentText: { color: colors.muted, fontWeight: '800', fontSize: 18 },
-  segmentTextActive: { color: '#FFFFFF' },
-  infoLine: { color: colors.text, lineHeight: 22 },
-  memoryText: { color: colors.text, lineHeight: 24 },
-  largeInput: { minHeight: 160, borderRadius: 20, backgroundColor: colors.card2, borderWidth: 1, borderColor: colors.border, color: colors.text, paddingHorizontal: 16, paddingVertical: 14, textAlignVertical: 'top' },
-  textInput: { minHeight: 58, borderRadius: 18, backgroundColor: colors.card2, borderWidth: 1, borderColor: colors.border, color: colors.text, paddingHorizontal: 16, paddingVertical: 12 },
-  inputLabel: { color: colors.text, fontWeight: '700', fontSize: 14 },
-  helperText: { color: colors.muted, lineHeight: 20 },
-  okText: { color: colors.good, lineHeight: 20 },
-  errorText: { color: colors.danger, lineHeight: 20 },
-  toggleCard: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', backgroundColor: colors.card2, borderRadius: 18, paddingHorizontal: 14, paddingVertical: 14, borderWidth: 1, borderColor: colors.border },
-  toggleCardActive: { borderColor: colors.primaryStrong },
-  toggleLabel: { color: colors.text, fontWeight: '700', flex: 1, paddingRight: 10 },
-  tabBar: { flexDirection: 'row', justifyContent: 'space-between', columnGap: 8, paddingHorizontal: 12, paddingTop: 10, paddingBottom: Platform.OS === 'ios' ? 24 : 12, borderTopWidth: 1, borderTopColor: colors.border, backgroundColor: colors.surface },
-  tabButton: { flex: 1, minHeight: 52, borderRadius: 18, alignItems: 'center', justifyContent: 'center', borderWidth: 1, borderColor: colors.border, backgroundColor: '#0F172A' },
-  tabButtonActive: { backgroundColor: colors.primaryStrong, borderColor: colors.primaryStrong },
-  tabButtonText: { color: colors.muted, fontWeight: '800', fontSize: 14 },
-  tabButtonTextActive: { color: '#FFFFFF' },
-  noteCard: { backgroundColor: colors.card2, borderRadius: 18, borderWidth: 1, borderColor: colors.border, padding: 14, rowGap: 10 },
-  noteTopRow: { flexDirection: 'row', alignItems: 'flex-start', columnGap: 10 },
-  noteTitle: { color: colors.text, fontWeight: '800', fontSize: 16 },
-  noteMeta: { color: colors.muted, fontSize: 12, marginTop: 4 },
-  noteText: { color: colors.text, lineHeight: 20 },
-  noteTagsWrap: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
+  safe: { flex: 1, backgroundColor: "#07182D" },
+  header: {
+    backgroundColor: "#0F1A2E",
+    borderBottomWidth: 1,
+    borderBottomColor: "#20314A",
+    paddingHorizontal: 18,
+    paddingTop: 16,
+    paddingBottom: 14,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+  },
+  brand: { color: "#F5F8FF", fontSize: 22, fontWeight: "800" },
+  subtitle: { color: "#8CA1C9", marginTop: 4, fontSize: 13 },
+  badge: {
+    borderWidth: 1.5,
+    borderColor: "#2F68FF",
+    borderRadius: 999,
+    paddingHorizontal: 14,
+    paddingVertical: 8,
+    backgroundColor: "#13213D",
+  },
+  badgeText: { color: "#FFF", fontWeight: "800" },
+  content: { flex: 1, minHeight: 0 },
+  flexScreen: { flex: 1, minHeight: 0 },
+  screen: { padding: 16, paddingBottom: 24 },
+  screenHeader: { paddingHorizontal: 16, paddingTop: 16, paddingBottom: 10 },
+  screenTitle: { color: "#F5F8FF", fontSize: 20, fontWeight: "800" },
+  screenLead: { color: "#93A7CC", fontSize: 15, marginTop: 8, lineHeight: 22 },
+  card: {
+    backgroundColor: "#16243E",
+    borderRadius: 24,
+    borderWidth: 1,
+    borderColor: "#263B5F",
+    padding: 16,
+    marginBottom: 16,
+  },
+  sectionTitle: { color: "#FFF", fontSize: 17, fontWeight: "800", marginBottom: 6 },
+  body: { color: "#DCE6FA", fontSize: 15, lineHeight: 23 },
+  small: { color: "#9CB1D3", fontSize: 13, lineHeight: 19 },
+  chatFrame: { flex: 1, minHeight: 0, paddingHorizontal: 16 },
+  chatScroll: {
+    flex: 1,
+    minHeight: 0,
+    backgroundColor: "#081D33",
+    borderRadius: 22,
+    borderWidth: 1,
+    borderColor: "#0D335A",
+  },
+  chatScrollContent: { padding: 12, paddingBottom: 20 },
+  bubble: { maxWidth: "86%", borderRadius: 20, paddingHorizontal: 14, paddingVertical: 12, marginBottom: 12 },
+  assistantBubble: { alignSelf: "flex-start", backgroundColor: "#273A59" },
+  userBubble: { alignSelf: "flex-end", backgroundColor: "#2F68FF" },
+  errorBubble: { borderWidth: 1, borderColor: "#FF7B7B" },
+  bubbleRole: { color: "#DFE8FA", fontWeight: "800", marginBottom: 6 },
+  bubbleText: { color: "#FFF", fontSize: 16, lineHeight: 24 },
+  bubbleMeta: { color: "#A8B8D5", fontSize: 12, marginTop: 8 },
+  inputDock: {
+    borderTopWidth: 1,
+    borderTopColor: "#223654",
+    backgroundColor: "#0F1A2E",
+    paddingHorizontal: 16,
+    paddingTop: 12,
+    paddingBottom: 12,
+  },
+  input: {
+    minHeight: 90,
+    backgroundColor: "#182742",
+    borderRadius: 18,
+    paddingHorizontal: 16,
+    paddingVertical: 14,
+    color: "#FFF",
+    fontSize: 17,
+    textAlignVertical: "top",
+  },
+  inputSingle: {
+    backgroundColor: "#182742",
+    borderRadius: 18,
+    paddingHorizontal: 16,
+    paddingVertical: 14,
+    color: "#FFF",
+    fontSize: 16,
+  },
+  actionRow: { flexDirection: "row", gap: 10, flexWrap: "wrap", marginTop: 12 },
+  primaryBtn: { backgroundColor: "#2F68FF", borderRadius: 16, paddingHorizontal: 18, paddingVertical: 14 },
+  secondaryBtn: {
+    backgroundColor: "#122744",
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: "#2C466C",
+    paddingHorizontal: 18,
+    paddingVertical: 14,
+  },
+  primaryBtnSmall: {
+    backgroundColor: "#2F68FF",
+    borderRadius: 16,
+    paddingHorizontal: 18,
+    paddingVertical: 14,
+    minWidth: 110,
+    alignItems: "center",
+  },
+  secondaryBtnSmall: {
+    backgroundColor: "#122744",
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: "#2C466C",
+    paddingHorizontal: 18,
+    paddingVertical: 14,
+    minWidth: 120,
+    alignItems: "center",
+  },
+  stopBtn: { backgroundColor: "#4B2333", borderColor: "#8B5161" },
+  primaryBtnText: { color: "#FFF", fontWeight: "800", fontSize: 15 },
+  secondaryBtnText: { color: "#E5EDFF", fontWeight: "700", fontSize: 15 },
+  helper: { color: "#90A6CA", marginTop: 10, lineHeight: 20 },
+  label: { color: "#FFF", fontWeight: "700", marginBottom: 8 },
+  segmentWrap: {
+    flexDirection: "row",
+    backgroundColor: "#101D35",
+    borderWidth: 1,
+    borderColor: "#29456A",
+    borderRadius: 18,
+    padding: 6,
+    marginTop: 14,
+  },
+  segmentBtn: { flex: 1, alignItems: "center", borderRadius: 14, paddingVertical: 12 },
+  segmentBtnActive: { backgroundColor: "#2F68FF" },
+  segmentText: { color: "#9BB0D4", fontWeight: "700" },
+  segmentTextActive: { color: "#FFF" },
+  timelineRow: { flexDirection: "row", alignItems: "flex-start", marginBottom: 14 },
+  timelineTime: { width: 58, color: "#FFF", fontWeight: "800", marginTop: 2 },
+  timelineDot: { width: 10, height: 10, borderRadius: 999, backgroundColor: "#4BA3FF", marginTop: 7, marginHorizontal: 10 },
+  timelineTitle: { color: "#FFF", fontWeight: "800", fontSize: 16 },
+  timelineMeta: { color: "#91A7CC", marginTop: 4 },
+  priorityRow: { flexDirection: "row", alignItems: "center", marginBottom: 14 },
+  priorityCircle: {
+    width: 46,
+    height: 46,
+    borderRadius: 999,
+    borderWidth: 1.5,
+    borderColor: "#2F68FF",
+    backgroundColor: "#12213A",
+    alignItems: "center",
+    justifyContent: "center",
+    marginRight: 14,
+  },
+  priorityCircleText: { color: "#FFF", fontWeight: "800" },
+  loadingRow: { flexDirection: "row", alignItems: "center" },
+  loadingText: { color: "#DCE6FA", marginLeft: 10 },
+  toggleRow: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", paddingVertical: 8 },
+  tabBar: {
+    backgroundColor: "#0F1A2E",
+    borderTopWidth: 1,
+    borderTopColor: "#20314A",
+    paddingHorizontal: 10,
+    paddingTop: 12,
+    paddingBottom: 18,
+    flexDirection: "row",
+    gap: 8,
+  },
+  tabBtn: {
+    flex: 1,
+    backgroundColor: "#121F37",
+    borderWidth: 1,
+    borderColor: "#263A58",
+    borderRadius: 16,
+    paddingVertical: 13,
+    alignItems: "center",
+  },
+  tabBtnActive: { backgroundColor: "#2F68FF", borderColor: "#2F68FF" },
+  tabText: { color: "#D9E4FA", fontWeight: "700", fontSize: 13 },
+  tabTextActive: { color: "#FFF" },
 });
+
