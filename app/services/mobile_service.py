@@ -260,6 +260,20 @@ def _normalize_auto_task_text(text: str) -> str:
         out = re.sub(pat, repl, out, flags=re.I)
     return _normalize_spaces(out)
 
+def _normalize_shopping_event_text(text: str) -> str:
+    out = _normalize_auto_task_text(text)
+    replacements = [
+        (r"\b(jadę|jade|idę|ide|robię|robie)\s+(na\s+)?zakupy\b", "zakupy"),
+        (r"\b(jadę|jade|idę|ide)\s+do\s+sklepu\b", "zakupy"),
+        (r"\bjadę\s+zrobić\s+zakupy\b", "zakupy"),
+        (r"\bjade\s+zrobic\s+zakupy\b", "zakupy"),
+    ]
+    for pat, repl in replacements:
+        out = re.sub(pat, repl, out, flags=re.I)
+    if "zakupy" not in out.lower():
+        out = f"{out} zakupy"
+    return _normalize_spaces(out)
+
 
 def _has_schedule(text: str) -> bool:
     low = (text or "").strip().lower()
@@ -278,11 +292,41 @@ def _looks_like_question(text: str) -> bool:
     return ("?" in low) or low.startswith(("co ", "jak ", "kiedy ", "czy ", "ile ", "pokaż ", "pokaz "))
 
 
+
+def _normalize_shopping_noun_phrase(text: str) -> str:
+    out = _normalize_spaces(text)
+    if not out:
+        return out
+
+    parts = out.split(" ", 1)
+    first = parts[0]
+    rest = parts[1] if len(parts) > 1 else ""
+
+    irregular = {
+        "pastę": "pasta",
+        "wodę": "woda",
+        "colę": "cola",
+        "pietruszkę": "pietruszka",
+        "marchewkę": "marchewka",
+        "bułkę": "bułka",
+        "kajzerkę": "kajzerka",
+        "cebulę": "cebula",
+    }
+    low = first.lower()
+    if low in irregular:
+        first = irregular[low]
+    elif len(first) > 2 and low.endswith("ę"):
+        first = first[:-1] + "a"
+
+    out = (first + (" " + rest if rest else "")).strip()
+    return out
+
 def _extract_shopping_item(text: str) -> str:
     cleaned = _normalize_spaces(text)
     cleaned = re.sub(r"^(kup(ić)?|kupi[ćc]|dokup|weź|wez)\s+", "", cleaned, flags=re.I)
     cleaned = re.sub(r"^(muszę|musze)\s+kup(ić)?\s+", "", cleaned, flags=re.I)
-    return cleaned.strip(" .,")
+    cleaned = cleaned.strip(" .,")
+    return _normalize_shopping_noun_phrase(cleaned)
 
 
 def _is_shopping_item(text: str) -> bool:
@@ -504,7 +548,7 @@ def chat_command(message: str, conversation_tail: Optional[List[Dict[str, Any]]]
             return {
                 "status": "ok",
                 "intent": "shopping_event_review",
-                "reply": "Widzę rzeczy zakupowe w Inboxie. Zaznacz, co dodać do zadania zakupów, a potem możesz jeszcze coś dopisać ręcznie.",
+                "reply": "Widzę rzeczy zakupowe w Inboxie. Zaznacz, co dodać do zadania zakupów. W kolejnym kroku dopytam w chacie, czy chcesz coś jeszcze dopisać.",
                 "actions": [{
                     "type": "shopping_review",
                     "event_text": normalized,
@@ -563,6 +607,7 @@ def chat_command(message: str, conversation_tail: Optional[List[Dict[str, Any]]]
     }
 
 
+
 def confirm_shopping_event(event_text: str, selected_item_ids: List[int], extra_items: List[str]) -> Dict[str, Any]:
     items = _load_raw_inbox()
     selected_texts: List[str] = []
@@ -576,7 +621,7 @@ def confirm_shopping_event(event_text: str, selected_item_ids: List[int], extra_
         else:
             keep.append(item)
 
-    extras = [_normalize_spaces(x) for x in (extra_items or []) if _normalize_spaces(x)]
+    extras = [_normalize_shopping_noun_phrase(_normalize_spaces(x)) for x in (extra_items or []) if _normalize_spaces(x)]
     all_items = selected_texts + extras
     if not all_items:
         return {
@@ -586,14 +631,43 @@ def confirm_shopping_event(event_text: str, selected_item_ids: List[int], extra_
             "changed": False,
         }
 
-    normalized_event = _normalize_auto_task_text(event_text)
-    synthetic = f"dodaj: {normalized_event} zakupy: " + ", ".join(all_items)
-    out = tasks_mod.add_task(synthetic)
+    normalized_event = _normalize_shopping_event_text(event_text)
+    create_text = f"dodaj: {normalized_event}"
+    out = tasks_mod.add_task(create_text)
+    task = out.get("task") if isinstance(out, dict) else None
+    task_id = int(task.get("id")) if isinstance(task, dict) and task.get("id") is not None else None
+
+    if task_id is not None:
+        try:
+            db = tasks_mod.load_tasks_db()
+            tasks = db.get("tasks", [])
+            for row in tasks:
+                if int(row.get("id") or -1) == task_id:
+                    row["title"] = "zakupy"
+                    row["category"] = "zakupy"
+                    row["checklist"] = {
+                        "title": "Zakupy",
+                        "items": [{"text": item, "done": False} for item in all_items],
+                    }
+                    break
+            tasks_mod.save_tasks_db(db)
+        except Exception:
+            pass
+
     _save_raw_inbox(keep)
+    due_at = ""
+    if isinstance(task, dict):
+        due_at = str(task.get("due_at") or "")
+
+    reply = "✅ Utworzyłem zadanie „zakupy”."
+    if due_at:
+        reply += f" (na {due_at})"
+    reply += "\nLista: " + ", ".join(all_items)
+
     return {
         "status": "ok",
         "intent": "shopping_confirm",
-        "message": str(out.get("reply") or "Utworzyłem zadanie zakupów."),
+        "message": reply,
         "changed": True,
     }
 

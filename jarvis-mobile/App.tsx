@@ -67,6 +67,11 @@ type ShoppingReview = {
   eventText: string;
   items: Array<InboxItem & { checked: boolean }>;
 };
+type PendingShoppingDraft = {
+  eventText: string;
+  selectedItemIds: number[];
+  selectedLabels: string[];
+};
 
 const STORAGE_BACKEND_URL = "jarvis_backend_url_v9";
 const STORAGE_NOTIFY = "jarvis_notify_enabled_v9";
@@ -122,14 +127,40 @@ function parseTranscriptFromEvent(event: any): string {
   return "";
 }
 
-function splitExtraItems(text: string) {
-  return text
-    .split(/[,\n;]/)
+
+function extractAdditionalShoppingItems(text: string) {
+  const raw = (text || "").trim();
+  if (!raw) return [];
+  const lower = raw.toLowerCase().trim();
+  if (["nie", "nic", "nic więcej", "nic wiecej", "to wszystko", "gotowe", "ok", "okej"].includes(lower)) {
+    return [];
+  }
+
+  let cleaned = raw
+    .replace(/^(tak[,! ]*)?/i, "")
+    .replace(/^(możesz|mozesz)\s+/i, "")
+    .replace(/^(jeszcze\s+)?dodaj\s+/i, "")
+    .replace(/^(dopis[zsz]\s+)?/i, "")
+    .replace(/^(poproszę\s+o\s+)?/i, "")
+    .trim();
+
+  if (!cleaned) return [];
+  return cleaned
+    .split(/,|;|\n|\s+i\s+/i)
     .map((x) => x.trim())
     .filter(Boolean);
 }
 
+function isShoppingFinalizeMessage(text: string) {
+  const lower = (text || "").trim().toLowerCase();
+  if (!lower) return false;
+  if (lower.endsWith("?")) return false;
+  if (extractAdditionalShoppingItems(text).length > 0) return true;
+  return ["nie", "nic", "nic więcej", "nic wiecej", "to wszystko", "gotowe", "ok", "okej"].includes(lower);
+}
+
 export default function App() {
+
   const [tab, setTab] = useState<TabKey>("chat");
   const [backendUrl, setBackendUrl] = useState(DEFAULT_BACKEND_URL);
   const [backendDraft, setBackendDraft] = useState(DEFAULT_BACKEND_URL);
@@ -171,7 +202,7 @@ export default function App() {
   const [voiceTarget, setVoiceTarget] = useState<VoiceTarget>("chat");
   const [voiceStatus, setVoiceStatus] = useState("Voice gotowy.");
   const [shoppingReview, setShoppingReview] = useState<ShoppingReview | null>(null);
-  const [extraShoppingText, setExtraShoppingText] = useState("");
+  const [pendingShoppingDraft, setPendingShoppingDraft] = useState<PendingShoppingDraft | null>(null);
   const transcriptRef = useRef("");
   const subscriptionsRef = useRef<any[]>([]);
   const scrollRef = useRef<ScrollView | null>(null);
@@ -373,45 +404,66 @@ export default function App() {
     return chatMessages.slice(-8).map((m) => ({ role: m.role, content: m.text }));
   }
 
-  async function runChat(textOverride?: string) {
+  
+async function runChat(textOverride?: string) {
     const text = (textOverride ?? chatInput).trim();
     if (!text || chatLoading) return;
 
-    setChatMessages((prev) => [...prev, { role: "user", text, meta: "chat-first" }]);
+    setChatMessages((prev) => [...prev, { role: "user", text, meta: pendingShoppingDraft ? "shopping-extra" : "chat-first" }]);
     setChatInput("");
     setChatLoading(true);
-    setShoppingReview(null);
-    setExtraShoppingText("");
 
     try {
-      const data = await apiPost("/mobile/chat", {
-        message: text,
-        conversation_tail: conversationTail(),
-      });
-      const actions = Array.isArray(data?.actions) ? data.actions : [];
-      const reviewAction = actions.find((a: any) => a?.type === "shopping_review");
-      if (reviewAction) {
-        setShoppingReview({
-          eventText: String(reviewAction?.event_text || text),
-          items: Array.isArray(reviewAction?.items)
-            ? reviewAction.items.map((item: any) => ({ ...item, checked: true }))
-            : [],
+      if (pendingShoppingDraft && isShoppingFinalizeMessage(text)) {
+        const data = await apiPost("/mobile/shopping/confirm", {
+          event_text: pendingShoppingDraft.eventText,
+          selected_item_ids: pendingShoppingDraft.selectedItemIds,
+          extra_items: extractAdditionalShoppingItems(text),
         });
-      }
-      setChatMessages((prev) => [
-        ...prev,
-        { role: "assistant", text: extractText(data), meta: data?.intent || "jarvis" },
-      ]);
-      if (data?.changed) {
+        setChatMessages((prev) => [
+          ...prev,
+          {
+            role: "assistant",
+            text: extractText(data),
+            meta: "shopping-confirmed",
+          },
+        ]);
+        setPendingShoppingDraft(null);
+        setShoppingReview(null);
         await Promise.all([loadPlan(), loadInbox(), loadBrain()]);
-      }
-      if (notifyEnabled && data?.changed) {
-        try {
-          await Notifications?.scheduleNotificationAsync?.({
-            content: { title: "Jarvis", body: extractText(data) },
-            trigger: null,
+      } else {
+        setShoppingReview(null);
+        setPendingShoppingDraft(null);
+
+        const data = await apiPost("/mobile/chat", {
+          message: text,
+          conversation_tail: conversationTail(),
+        });
+        const actions = Array.isArray(data?.actions) ? data.actions : [];
+        const reviewAction = actions.find((a: any) => a?.type === "shopping_review");
+        if (reviewAction) {
+          setShoppingReview({
+            eventText: String(reviewAction?.event_text || text),
+            items: Array.isArray(reviewAction?.items)
+              ? reviewAction.items.map((item: any) => ({ ...item, checked: true }))
+              : [],
           });
-        } catch {}
+        }
+        setChatMessages((prev) => [
+          ...prev,
+          { role: "assistant", text: extractText(data), meta: data?.intent || "jarvis" },
+        ]);
+        if (data?.changed) {
+          await Promise.all([loadPlan(), loadInbox(), loadBrain()]);
+        }
+        if (notifyEnabled && data?.changed) {
+          try {
+            await Notifications?.scheduleNotificationAsync?.({
+              content: { title: "Jarvis", body: extractText(data) },
+              trigger: null,
+            });
+          } catch {}
+        }
       }
     } catch (e: any) {
       setChatMessages((prev) => [
@@ -427,6 +479,7 @@ export default function App() {
       setChatLoading(false);
     }
   }
+
 
   async function addInbox(textOverride?: string) {
     const text = (textOverride ?? inboxInput).trim();
@@ -445,46 +498,36 @@ export default function App() {
     }
   }
 
-  async function submitShoppingReview() {
+  
+async function submitShoppingReview() {
     if (!shoppingReview) return;
-    setChatLoading(true);
-    try {
-      const data = await apiPost("/mobile/shopping/confirm", {
-        event_text: shoppingReview.eventText,
-        selected_item_ids: shoppingReview.items.filter((x) => x.checked).map((x) => x.id),
-        extra_items: splitExtraItems(extraShoppingText),
-      });
-      setChatMessages((prev) => [
-        ...prev,
-        {
-          role: "assistant",
-          text: extractText(data),
-          meta: "shopping-confirmed",
-        },
-      ]);
-      setShoppingReview(null);
-      setExtraShoppingText("");
-      await Promise.all([loadPlan(), loadInbox(), loadBrain()]);
-    } catch (e: any) {
-      setChatMessages((prev) => [
-        ...prev,
-        {
-          role: "assistant",
-          text: `Błąd tworzenia zakupów: ${e?.message || "nie udało się zapisać."}`,
-          meta: "error",
-          error: true,
-        },
-      ]);
-    } finally {
-      setChatLoading(false);
-    }
+    const selectedItems = shoppingReview.items.filter((x) => x.checked);
+    setShoppingReview(null);
+    setPendingShoppingDraft({
+      eventText: shoppingReview.eventText,
+      selectedItemIds: selectedItems.map((x) => x.id),
+      selectedLabels: selectedItems.map((x) => x.text),
+    });
+    const preview = selectedItems.length
+      ? `Mam już zaznaczone: ${selectedItems.map((x) => x.text).join(", ")}.`
+      : "Na razie nie zaznaczyłaś żadnej pozycji z listy.";
+    setChatMessages((prev) => [
+      ...prev,
+      {
+        role: "assistant",
+        text: `${preview} Czy chcesz dodać coś jeszcze? Powiedz lub napisz np. „tak, dodaj mleko, chleb i pietruszkę” albo „gotowe”.`,
+        meta: "shopping-extra-question",
+      },
+    ]);
   }
 
-  async function deleteTask(taskId: number) {
+
+  
+async function deleteTask(taskId: number) {
     try {
       const data = await apiDelete(`/mobile/plan/task/${taskId}`);
-      setChatMessages((prev) => [...prev, { role: "assistant", text: extractText(data), meta: "delete-task" }]);
-      await loadPlan();
+      await Promise.all([loadPlan(), loadBrain()]);
+      Alert.alert("Plan", extractText(data));
     } catch (e: any) {
       Alert.alert("Błąd", e?.message || "Nie udało się usunąć zadania.");
     }
@@ -507,8 +550,8 @@ export default function App() {
         onPress: async () => {
           try {
             const data = await apiDelete(`/mobile/plan/day/${currentDate}`);
-            setChatMessages((prev) => [...prev, { role: "assistant", text: extractText(data), meta: "clear-day" }]);
-            await loadPlan();
+            await Promise.all([loadPlan(), loadBrain()]);
+            Alert.alert("Plan", extractText(data));
           } catch (e: any) {
             Alert.alert("Błąd", e?.message || "Nie udało się wyczyścić dnia.");
           }
@@ -516,6 +559,7 @@ export default function App() {
       },
     ]);
   }
+
 
   function applyTranscript(text: string, target: VoiceTarget) {
     if (!text.trim()) return;
@@ -716,17 +760,8 @@ export default function App() {
                           <Text style={styles.checkboxText}>{item.text}</Text>
                         </TouchableOpacity>
                       ))}
-                      <Text style={[styles.bubbleText, { marginTop: 12 }]}>Czy dodać coś jeszcze?</Text>
-                      <TextInput
-                        style={styles.reviewInput}
-                        value={extraShoppingText}
-                        onChangeText={setExtraShoppingText}
-                        placeholder="Np. chleb, jajka"
-                        placeholderTextColor="#7E93B9"
-                        multiline
-                      />
                       <TouchableOpacity style={styles.primaryBtnSmall} onPress={submitShoppingReview}>
-                        <Text style={styles.primaryBtnText}>Utwórz zadanie zakupów</Text>
+                        <Text style={styles.primaryBtnText}>Dalej</Text>
                       </TouchableOpacity>
                     </View>
                   )}
