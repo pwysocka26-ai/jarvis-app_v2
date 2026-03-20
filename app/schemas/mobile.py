@@ -19,9 +19,10 @@ class MobileActionResponse(BaseModel):
     intent: Optional[str] = None
     message: str
     changed: bool = False
+    actions: List[dict[str, Any]] = Field(default_factory=list)
 
 
-class InboxListItem(BaseModel):
+class InboxRow(BaseModel):
     id: int
     text: str
     kind: str
@@ -29,27 +30,8 @@ class InboxListItem(BaseModel):
 
 class InboxListResponse(BaseModel):
     status: str
-    shopping: List[InboxListItem] = Field(default_factory=list)
-    unscheduled: List[InboxListItem] = Field(default_factory=list)
-
-
-class ShoppingConfirmRequest(BaseModel):
-    event_text: str
-    selected_item_ids: List[int] = Field(default_factory=list)
-    extra_items: List[str] = Field(default_factory=list)
-
-
-class MobileChatRequest(BaseModel):
-    message: str = Field(min_length=1)
-    conversation_tail: List[dict[str, Any]] = Field(default_factory=list)
-
-
-class MobileChatResponse(BaseModel):
-    status: str
-    intent: Optional[str] = None
-    reply: str
-    actions: List[dict[str, Any]] = Field(default_factory=list)
-    changed: bool = False
+    shopping: List[InboxRow] = Field(default_factory=list)
+    unscheduled: List[InboxRow] = Field(default_factory=list)
 
 
 class FreeWindow(BaseModel):
@@ -82,6 +64,7 @@ class TimelineItem(BaseModel):
     priority: Optional[int] = None
     task_id: Optional[int] = None
     deletable: bool = False
+    checklist_count: int = 0
 
 
 class DaySummary(BaseModel):
@@ -97,6 +80,52 @@ class DayScreenPayload(BaseModel):
     free_windows: List[FreeWindow]
     time_blocks: List[TimeBlock]
     priorities: List[PriorityItem]
+
+
+class MobileChatRequest(BaseModel):
+    message: str = Field(min_length=1)
+    conversation_tail: List[dict[str, Any]] = Field(default_factory=list)
+
+
+class ShoppingConfirmRequest(BaseModel):
+    event_text: str
+    selected_item_ids: List[int] = Field(default_factory=list)
+    extra_items: List[str] = Field(default_factory=list)
+
+
+class ChecklistAddRequest(BaseModel):
+    text: str
+
+
+class ChecklistItem(BaseModel):
+    index: int
+    text: str
+    done: bool = False
+
+
+class PlanTaskDetail(BaseModel):
+    task_id: int
+    title: str
+    due_at: str
+    category: str
+    checklist: List[ChecklistItem] = Field(default_factory=list)
+
+
+class PlanTaskDetailResponse(BaseModel):
+    status: str
+    message: str
+    task: Optional[PlanTaskDetail] = None
+
+
+class ShoppingTaskSummary(BaseModel):
+    task_id: int
+    title: str
+    due_at: str
+
+
+class ShoppingTaskListResponse(BaseModel):
+    status: str
+    tasks: List[ShoppingTaskSummary] = Field(default_factory=list)
 
 
 class MobileAiChatRequest(BaseModel):
