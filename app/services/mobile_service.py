@@ -349,7 +349,7 @@ def _extract_shopping_items_from_reply(text: str) -> List[str]:
     out: List[str] = []
     seen = set()
     for part in parts:
-        item = _normalize_shopping_noun_phrase(part)
+        item = _extract_shopping_item(part)
         key = item.lower()
         if item and key not in seen:
             out.append(item)
@@ -357,11 +357,66 @@ def _extract_shopping_items_from_reply(text: str) -> List[str]:
     return out
 
 
+def _is_show_shopping_list(text: str) -> bool:
+    low = _normalize_spaces(text).lower()
+    return low in {
+        "pokaż listę zakupów",
+        "pokaz liste zakupow",
+        "pokaż zakupy",
+        "pokaz zakupy",
+        "lista zakupów",
+        "lista zakupow",
+        "co jest na liście zakupów",
+        "co jest na liscie zakupow",
+        "co mam na liście zakupów",
+        "co mam na liscie zakupow",
+    }
+
+
+def _sanitize_inbox_records() -> List[Dict[str, Any]]:
+    items = _load_raw_inbox()
+    cleaned: List[Dict[str, Any]] = []
+    seen = set()
+    changed = False
+    for item in items:
+        text = _normalize_spaces(str(item.get("text") or ""))
+        if not text:
+            changed = True
+            continue
+        kind = str(item.get("kind") or "task")
+        normalized_text = text
+        normalized_kind = kind
+        if _is_shopping_item(text) or _is_add_to_existing_shopping_task(text) or text.lower().startswith(("dodaj zakupy ", "potrzebuję ", "potrzebuje ")):
+            normalized_text = _extract_shopping_item(text)
+            normalized_kind = "shopping"
+        elif kind == "shopping":
+            normalized_text = _extract_shopping_item(text)
+            normalized_kind = "shopping"
+        key = (normalized_kind, normalized_text.lower())
+        if not normalized_text or key in seen:
+            changed = True
+            continue
+        seen.add(key)
+        new_item = dict(item)
+        new_item["text"] = normalized_text
+        new_item["kind"] = normalized_kind
+        cleaned.append(new_item)
+        if normalized_text != text or normalized_kind != kind:
+            changed = True
+    if changed:
+        _save_raw_inbox(cleaned)
+    return cleaned
+
+
 def _is_shopping_item(text: str) -> bool:
     low = (text or "").strip().lower()
     if _has_schedule(low):
         return False
-    return low.startswith(("kup ", "kupić ", "kupic ", "dokup ", "muszę kupić ", "musze kupic ", "dodaj do listy zakupów ", "dodaj do listy zakupow "))
+    return low.startswith((
+        "kup ", "kupić ", "kupic ", "dokup ", "muszę kupić ", "musze kupic ",
+        "dodaj do listy zakupów ", "dodaj do listy zakupow ",
+        "dodaj zakupy ", "potrzebuję ", "potrzebuje ", "trzeba kupić ", "trzeba kupic ",
+    ))
 
 
 def _is_add_to_existing_shopping_task(text: str) -> bool:
@@ -429,7 +484,7 @@ def _append_inbox_item(text: str, kind: str = "task") -> Dict[str, Any]:
 
 
 def _inbox_rows() -> List[Dict[str, Any]]:
-    items = _load_raw_inbox()
+    items = _sanitize_inbox_records()
     rows = []
     for idx, item in enumerate(items, start=1):
         text = str(item.get("text") or "").strip()
@@ -475,7 +530,7 @@ def create_inbox_item(text: str) -> Dict[str, Any]:
 
 
 def delete_inbox_item(item_id: int) -> Dict[str, Any]:
-    items = _load_raw_inbox()
+    items = _sanitize_inbox_records()
     idx = int(item_id) - 1
     if idx < 0 or idx >= len(items):
         return {"status": "warning", "intent": "delete_inbox_item", "message": "Nie ma takiej pozycji w Inboxie.", "changed": False}
@@ -765,6 +820,18 @@ def chat_command(message: str, conversation_tail: Optional[List[Dict[str, Any]]]
     text = _normalize_spaces(message)
     low = text.lower()
     intent = _classify_message(text)
+    if _is_show_shopping_list(text):
+        shopping = [row.get("text") for row in list_inbox_items().get("shopping") or []]
+        shopping_tasks = list_upcoming_shopping_tasks().get("tasks") or []
+        if shopping_tasks:
+            first = shopping_tasks[0]
+            when = str(first.get("due_at") or "").replace("T", " o ")[:16]
+            if shopping:
+                return {"status": "ok", "intent": "show_shopping_list", "message": f"Najbliższe zakupy są {when}. Lista produktów: {', '.join(shopping)}", "actions": [], "changed": False}
+            return {"status": "ok", "intent": "show_shopping_list", "message": f"Najbliższe zakupy są {when}, ale lista zakupów jest pusta.", "actions": [], "changed": False}
+        if shopping:
+            return {"status": "ok", "intent": "show_shopping_list", "message": "Lista zakupów: " + ", ".join(shopping), "actions": [], "changed": False}
+        return {"status": "ok", "intent": "show_shopping_list", "message": "Lista zakupów jest pusta.", "actions": [], "changed": False}
     if "co mam dziś" in low or "co mam dzis" in low:
         return {"status": "ok", "intent": "question_today", "message": _summarize_day(0, "Dziś"), "actions": [], "changed": False}
     if "plan jutra" in low or "co mam jutro" in low:
@@ -800,7 +867,7 @@ def chat_command(message: str, conversation_tail: Optional[List[Dict[str, Any]]]
 
 
 def confirm_shopping_event(event_text: str, selected_item_ids: List[int], extra_items: List[str]) -> Dict[str, Any]:
-    items = _load_raw_inbox()
+    items = _sanitize_inbox_records()
     selected_texts: List[str] = []
     keep: List[Dict[str, Any]] = []
     selected = {int(x) for x in selected_item_ids}
