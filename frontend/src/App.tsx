@@ -1,4 +1,4 @@
-﻿import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   Bell,
   Home,
@@ -27,11 +27,11 @@ import {
   Cog,
   Check,
   CalendarDays,
-  Volume2,
   Loader2,
+  ClipboardList,
 } from 'lucide-react';
 
-type TabId = 'home' | 'chat' | 'calendar' | 'inbox' | 'settings';
+type TabId = 'home' | 'chat' | 'plan' | 'calendar' | 'projects' | 'settings';
 
 type ChatMessage = {
   id: string;
@@ -64,7 +64,7 @@ const copy = {
   navHome: 'Home',
   navChat: 'Czat',
   navCalendar: 'Kalendarz',
-  navInbox: 'Projekty',
+  navProjects: 'Projekty',
   navSettings: 'Ustawienia',
 };
 
@@ -151,15 +151,21 @@ function DashboardCard({
   value,
   subtitle,
   bg,
+  onClick,
 }: {
   icon: React.ReactNode;
   title: string;
   value: string;
   subtitle: string;
   bg: string;
+  onClick?: () => void;
 }) {
   return (
-    <button className={`h-[118px] rounded-[22px] ${bg} px-4 py-3 text-left shadow-sm`}>
+    <button
+      className={`h-[118px] rounded-[22px] ${bg} px-4 py-3 text-left shadow-sm`}
+      onClick={onClick}
+      type="button"
+    >
       <div className="mb-2 flex items-start justify-between gap-2">
         <div className="flex min-w-0 items-center gap-3">
           <div className="shrink-0 rounded-2xl bg-white/85 p-2 shadow-sm">{icon}</div>
@@ -183,7 +189,7 @@ function NavItem({
   setActiveTab,
   icon: Icon,
 }: {
-  id: TabId;
+  id: 'home' | 'chat' | 'calendar' | 'projects' | 'settings';
   label: string;
   activeTab: TabId;
   setActiveTab: (tab: TabId) => void;
@@ -195,6 +201,7 @@ function NavItem({
     <button
       onClick={() => setActiveTab(id)}
       className="flex flex-col items-center justify-center gap-1"
+      type="button"
     >
       <div
         className={`flex h-11 w-11 items-center justify-center rounded-2xl transition ${
@@ -223,7 +230,7 @@ function BottomNav({
         <NavItem id="home" label={copy.navHome} activeTab={activeTab} setActiveTab={setActiveTab} icon={Home} />
         <NavItem id="chat" label={copy.navChat} activeTab={activeTab} setActiveTab={setActiveTab} icon={MessageCircle} />
         <NavItem id="calendar" label={copy.navCalendar} activeTab={activeTab} setActiveTab={setActiveTab} icon={Calendar} />
-        <NavItem id="inbox" label={copy.navInbox} activeTab={activeTab} setActiveTab={setActiveTab} icon={Package} />
+        <NavItem id="projects" label={copy.navProjects} activeTab={activeTab} setActiveTab={setActiveTab} icon={Package} />
         <NavItem id="settings" label={copy.navSettings} activeTab={activeTab} setActiveTab={setActiveTab} icon={Settings} />
       </div>
     </nav>
@@ -257,7 +264,7 @@ function PhoneShell({
   );
 }
 
-function HomeScreen() {
+function HomeScreen({ setActiveTab }: { setActiveTab: (tab: TabId) => void }) {
   return (
     <div className="flex h-full flex-col">
       <Header title="Home" subtitle={copy.version} beta />
@@ -296,6 +303,7 @@ function HomeScreen() {
           value="10"
           subtitle={copy.tasksLabel}
           bg="bg-[linear-gradient(135deg,#f7efe9_0%,#f4efed_100%)]"
+          onClick={() => setActiveTab('plan')}
         />
         <DashboardCard
           icon={<Calendar className="h-5 w-5 text-violet-400" />}
@@ -303,6 +311,7 @@ function HomeScreen() {
           value="5"
           subtitle={copy.tasksLabel}
           bg="bg-[linear-gradient(135deg,#f0eefb_0%,#f2f0fb_100%)]"
+          onClick={() => setActiveTab('plan')}
         />
         <DashboardCard
           icon={<CalendarDays className="h-5 w-5 text-cyan-400" />}
@@ -310,6 +319,7 @@ function HomeScreen() {
           value="3"
           subtitle={copy.tasksLabel}
           bg="bg-[linear-gradient(135deg,#ecf5f5_0%,#edf2f2_100%)]"
+          onClick={() => setActiveTab('calendar')}
         />
         <DashboardCard
           icon={<Inbox className="h-5 w-5 text-violet-400" />}
@@ -317,6 +327,7 @@ function HomeScreen() {
           value="15"
           subtitle={copy.tasksLabel}
           bg="bg-[linear-gradient(135deg,#f0eefb_0%,#f2f0fb_100%)]"
+          onClick={() => setActiveTab('projects')}
         />
       </section>
 
@@ -329,14 +340,22 @@ function HomeScreen() {
             </h3>
           </div>
 
-          <button className="flex shrink-0 items-center gap-1 text-[14px] font-medium text-indigo-400">
+          <button
+            className="flex shrink-0 items-center gap-1 text-[14px] font-medium text-indigo-400"
+            onClick={() => setActiveTab('plan')}
+            type="button"
+          >
             {copy.seeAll}
             <ChevronRight className="h-4 w-4" />
           </button>
         </div>
 
         <div className="rounded-[22px] bg-white/75 p-3 shadow-sm">
-          <div className="flex items-center justify-between gap-3 border-b border-slate-200 pb-3">
+          <button
+            className="flex w-full items-center justify-between gap-3 border-b border-slate-200 pb-3 text-left"
+            onClick={() => setActiveTab('plan')}
+            type="button"
+          >
             <div className="flex min-w-0 items-center gap-3">
               <div className="h-4 w-4 shrink-0 rounded-full bg-violet-400" />
               <div className="shrink-0 text-[15px] font-semibold text-slate-800">11:00</div>
@@ -346,9 +365,13 @@ function HomeScreen() {
             <div className="shrink-0 rounded-2xl bg-violet-100 px-3 py-1.5 text-[13px] font-medium text-violet-500">
               {copy.meetingTag}
             </div>
-          </div>
+          </button>
 
-          <div className="flex items-center justify-between gap-3 pt-3">
+          <button
+            className="flex w-full items-center justify-between gap-3 pt-3 text-left"
+            onClick={() => setActiveTab('plan')}
+            type="button"
+          >
             <div className="flex min-w-0 items-center gap-3">
               <div className="h-4 w-4 shrink-0 rounded-full bg-orange-300" />
               <div className="shrink-0 text-[15px] font-semibold text-slate-800">15:30</div>
@@ -358,14 +381,63 @@ function HomeScreen() {
             <div className="shrink-0 rounded-2xl bg-orange-100 px-3 py-1.5 text-[13px] font-medium text-orange-400">
               {copy.taskTag}
             </div>
-          </div>
+          </button>
         </div>
       </section>
 
       <div className="mt-auto flex justify-end pb-2 pr-2">
-        <button className="z-20 flex h-14 w-14 items-center justify-center rounded-full bg-[linear-gradient(180deg,#7196ff_0%,#4f75ff_100%)] text-white shadow-[0_18px_30px_rgba(77,116,255,0.28)] transition hover:scale-105">
+        <button className="z-20 flex h-14 w-14 items-center justify-center rounded-full bg-[linear-gradient(180deg,#7196ff_0%,#4f75ff_100%)] text-white shadow-[0_18px_30px_rgba(77,116,255,0.28)] transition hover:scale-105" type="button">
           <Plus className="h-7 w-7" />
         </button>
+      </div>
+    </div>
+  );
+}
+
+function PlanScreen() {
+  const items = [
+    ['09:00', 'Sprawdzić plan dnia', 'Dzisiaj', 'bg-blue-500'],
+    ['11:00', 'Umówione spotkanie z zespołem', 'Spotkanie', 'bg-violet-500'],
+    ['15:30', 'Przegląd zadań tygodniowych', 'Zadanie', 'bg-orange-400'],
+    ['18:00', 'Siłownia', 'Prywatne', 'bg-emerald-500'],
+    ['19:00', 'Zakupy', 'Dom', 'bg-amber-400'],
+  ] as const;
+
+  return (
+    <div className="flex h-full flex-col">
+      <Header
+        title="Plan"
+        subtitle={copy.version}
+        icon={<ClipboardList className="h-10 w-10 text-indigo-400" />}
+      />
+
+      <div className="min-h-0 flex-1 overflow-y-auto pr-1">
+        <div className="mb-4 rounded-[22px] bg-[linear-gradient(180deg,#edf1f9_0%,#ebedf5_100%)] p-5">
+          <div className="text-[18px] font-semibold text-slate-800">Dzisiejszy plan</div>
+          <div className="mt-2 text-[15px] leading-6 text-slate-600">
+            Wszystkie najważniejsze rzeczy zebrane w jednym miejscu.
+          </div>
+        </div>
+
+        <div className="space-y-3">
+          {items.map(([time, title, tag, dotClass]) => (
+            <div key={title} className="rounded-[22px] bg-white/75 p-4 shadow-sm">
+              <div className="flex items-start justify-between gap-3">
+                <div className="flex min-w-0 items-start gap-3">
+                  <div className={`mt-1 h-4 w-4 shrink-0 rounded-full ${dotClass}`} />
+                  <div className="min-w-0">
+                    <div className="text-[14px] font-medium text-slate-500">{time}</div>
+                    <div className="mt-1 text-[18px] font-semibold text-slate-800">{title}</div>
+                  </div>
+                </div>
+
+                <div className="shrink-0 rounded-2xl bg-indigo-100 px-3 py-1.5 text-[13px] font-medium text-indigo-500">
+                  {tag}
+                </div>
+              </div>
+            </div>
+          ))}
+        </div>
       </div>
     </div>
   );
@@ -595,7 +667,7 @@ function CalendarScreen() {
 
         <div className="mt-4 flex items-center justify-between">
           <h3 className="text-[22px] font-semibold text-slate-800">Czwartek, 24 kwietnia</h3>
-          <button className="flex items-center gap-2 rounded-full bg-[linear-gradient(90deg,#4f75ff,#3b82f6)] px-5 py-3 text-[16px] text-white shadow-sm">
+          <button className="flex items-center gap-2 rounded-full bg-[linear-gradient(90deg,#4f75ff,#3b82f6)] px-5 py-3 text-[16px] text-white shadow-sm" type="button">
             <Plus className="h-5 w-5" />
             Nowe wydarzenie
           </button>
@@ -820,10 +892,13 @@ export default function App() {
     case 'chat':
       screen = <ChatScreen />;
       break;
+    case 'plan':
+      screen = <PlanScreen />;
+      break;
     case 'calendar':
       screen = <CalendarScreen />;
       break;
-    case 'inbox':
+    case 'projects':
       screen = <ProjectsScreen />;
       break;
     case 'settings':
@@ -831,7 +906,7 @@ export default function App() {
       break;
     case 'home':
     default:
-      screen = <HomeScreen />;
+      screen = <HomeScreen setActiveTab={setActiveTab} />;
       break;
   }
 
