@@ -13,6 +13,8 @@ import {
   Search,
   ChevronDown,
   ChevronLeft,
+  ChevronUp,
+  ChevronRight as ChevronRightIcon,
   MapPin,
   Mic,
   Send,
@@ -29,6 +31,8 @@ import {
   CalendarDays,
   Loader2,
   ClipboardList,
+  X,
+  Square,
 } from 'lucide-react';
 
 type TabId = 'home' | 'chat' | 'plan' | 'calendar' | 'projects' | 'settings';
@@ -37,6 +41,32 @@ type ChatMessage = {
   id: string;
   role: 'user' | 'assistant' | 'system';
   text: string;
+};
+
+type CalendarChecklistItem = {
+  id: string;
+  label: string;
+  done: boolean;
+};
+
+type CalendarShoppingItem = {
+  id: string;
+  label: string;
+  done: boolean;
+};
+
+type CalendarEvent = {
+  id: string;
+  title: string;
+  date: string;
+  time: string;
+  location: string;
+  badge: string;
+  dotClass: string;
+  badgeClass: string;
+  note?: string;
+  checklist?: CalendarChecklistItem[];
+  shoppingList?: CalendarShoppingItem[];
 };
 
 const copy = {
@@ -69,6 +99,60 @@ const copy = {
 };
 
 const OLLAMA_MODEL = 'llama3.2';
+
+const WEEKDAYS_SHORT = ['Pon', 'Wt', 'Śr', 'Czw', 'Pt', 'Sob', 'Ndz'];
+const MONTHS_PL = [
+  'Styczeń',
+  'Luty',
+  'Marzec',
+  'Kwiecień',
+  'Maj',
+  'Czerwiec',
+  'Lipiec',
+  'Sierpień',
+  'Wrzesień',
+  'Październik',
+  'Listopad',
+  'Grudzień',
+];
+
+function pad2(value: number) {
+  return String(value).padStart(2, '0');
+}
+
+function toDateKey(date: Date) {
+  return `${date.getFullYear()}-${pad2(date.getMonth() + 1)}-${pad2(date.getDate())}`;
+}
+
+function parseDateKey(dateKey: string) {
+  const [year, month, day] = dateKey.split('-').map(Number);
+  return new Date(year, month - 1, day);
+}
+
+function startOfWeek(date: Date) {
+  const next = new Date(date);
+  const day = next.getDay();
+  const diff = day === 0 ? -6 : 1 - day;
+  next.setDate(next.getDate() + diff);
+  next.setHours(0, 0, 0, 0);
+  return next;
+}
+
+function addDays(date: Date, days: number) {
+  const next = new Date(date);
+  next.setDate(next.getDate() + days);
+  return next;
+}
+
+function formatMonthYear(date: Date) {
+  return `${MONTHS_PL[date.getMonth()]} ${date.getFullYear()}`;
+}
+
+function formatDayLabel(dateKey: string) {
+  const date = parseDateKey(dateKey);
+  const weekdayIndex = date.getDay() === 0 ? 6 : date.getDay() - 1;
+  return `${WEEKDAYS_SHORT[weekdayIndex]}, ${date.getDate()} ${MONTHS_PL[date.getMonth()].toLowerCase()}`;
+}
 
 function Header({
   title,
@@ -607,17 +691,257 @@ function ChatScreen() {
 }
 
 function CalendarScreen() {
-  const events = [
-    ['09:00', 'Joga', 'Fitness Club', '45 min', 'bg-violet-500', 'bg-violet-500/10 text-violet-600'],
-    ['10:30', 'Spotkanie z zespołem', 'Biuro + Online (4 osoby)', 'Zespół', 'bg-blue-500', 'bg-blue-500/10 text-blue-600'],
-    ['12:00', 'Lunch z Anna', 'Restauracja „Zdrowa Kuchnia”', '90 min', 'bg-emerald-500', 'bg-emerald-500/10 text-emerald-600'],
-    ['14:00', 'Przegląd projektu', 'Przygotować prezentację', 'Praca', 'bg-orange-500', 'bg-orange-500/10 text-orange-600'],
-    ['16:30', 'Dentysta', 'Klinika zdrowy uśmiech', '60 min', 'bg-rose-500', 'bg-rose-500/10 text-rose-600'],
-    ['18:00', 'Trening siłowy', 'Siłownia Power Gym', '75 min', 'bg-slate-500', 'bg-slate-500/10 text-slate-600'],
-  ] as const;
+  const today = useMemo(() => new Date(), []);
+  const initialWeekStart = useMemo(() => startOfWeek(today), [today]);
+
+  const initialEvents = useMemo<CalendarEvent[]>(
+    () => [
+      {
+        id: '1',
+        date: toDateKey(addDays(initialWeekStart, 0)),
+        time: '09:00',
+        title: 'Joga',
+        location: 'Fitness Club',
+        badge: '45 min',
+        dotClass: 'bg-violet-500',
+        badgeClass: 'bg-violet-500/10 text-violet-600',
+        note: 'Zabrać matę i butelkę wody.',
+        checklist: [
+          { id: '1-1', label: 'Strój sportowy', done: true },
+          { id: '1-2', label: 'Mata', done: false },
+        ],
+        shoppingList: [{ id: '1-s1', label: 'Woda kokosowa', done: false }],
+      },
+      {
+        id: '2',
+        date: toDateKey(addDays(initialWeekStart, 1)),
+        time: '10:30',
+        title: 'Spotkanie z zespołem',
+        location: 'Biuro + Online (4 osoby)',
+        badge: 'Zespół',
+        dotClass: 'bg-blue-500',
+        badgeClass: 'bg-blue-500/10 text-blue-600',
+        note: 'Omówić plan sprintu i priorytety tygodnia.',
+        checklist: [
+          { id: '2-1', label: 'Agenda spotkania', done: true },
+          { id: '2-2', label: 'Podsumowanie sprintu', done: false },
+        ],
+        shoppingList: [],
+      },
+      {
+        id: '3',
+        date: toDateKey(addDays(initialWeekStart, 2)),
+        time: '12:00',
+        title: 'Lunch z Anną',
+        location: 'Restauracja „Zdrowa Kuchnia”',
+        badge: '90 min',
+        dotClass: 'bg-emerald-500',
+        badgeClass: 'bg-emerald-500/10 text-emerald-600',
+        note: 'Rezerwacja na nazwisko Wysocka.',
+        checklist: [],
+        shoppingList: [],
+      },
+      {
+        id: '4',
+        date: toDateKey(addDays(initialWeekStart, 3)),
+        time: '14:00',
+        title: 'Przegląd projektu',
+        location: 'Przygotować prezentację',
+        badge: 'Praca',
+        dotClass: 'bg-orange-500',
+        badgeClass: 'bg-orange-500/10 text-orange-600',
+        note: 'Sprawdzić status backendu i frontendowego kalendarza.',
+        checklist: [
+          { id: '4-1', label: 'Slajdy', done: false },
+          { id: '4-2', label: 'Demo', done: false },
+        ],
+        shoppingList: [],
+      },
+      {
+        id: '5',
+        date: toDateKey(addDays(initialWeekStart, 3)),
+        time: '16:30',
+        title: 'Dentysta',
+        location: 'Klinika Zdrowy Uśmiech',
+        badge: '60 min',
+        dotClass: 'bg-rose-500',
+        badgeClass: 'bg-rose-500/10 text-rose-600',
+        note: 'Zabrać poprzednie wyniki i kartę pacjenta.',
+        checklist: [],
+        shoppingList: [{ id: '5-s1', label: 'Szczoteczka soniczna', done: false }],
+      },
+      {
+        id: '6',
+        date: toDateKey(addDays(initialWeekStart, 5)),
+        time: '18:00',
+        title: 'Trening siłowy',
+        location: 'Siłownia Power Gym',
+        badge: '75 min',
+        dotClass: 'bg-slate-500',
+        badgeClass: 'bg-slate-500/10 text-slate-600',
+        note: 'Dzień nóg + rozciąganie.',
+        checklist: [{ id: '6-1', label: 'Karnet', done: true }],
+        shoppingList: [{ id: '6-s1', label: 'Baton proteinowy', done: false }],
+      },
+    ],
+    [initialWeekStart]
+  );
+
+  const [events, setEvents] = useState<CalendarEvent[]>(initialEvents);
+  const [weekStart, setWeekStart] = useState(initialWeekStart);
+  const [selectedDate, setSelectedDate] = useState(toDateKey(today));
+  const [expandedEventId, setExpandedEventId] = useState<string | null>(null);
+  const [showMonthPicker, setShowMonthPicker] = useState(false);
+  const [pickerDate, setPickerDate] = useState(today);
+  const [showNewEventModal, setShowNewEventModal] = useState(false);
+
+  const [newEventTitle, setNewEventTitle] = useState('');
+  const [newEventTime, setNewEventTime] = useState('10:00');
+  const [newEventLocation, setNewEventLocation] = useState('');
+  const [newEventNote, setNewEventNote] = useState('');
+  const [newEventChecklist, setNewEventChecklist] = useState('');
+  const [newEventShopping, setNewEventShopping] = useState('');
+
+  const eventsByDate = useMemo(() => {
+    const grouped: Record<string, CalendarEvent[]> = {};
+    for (const event of events) {
+      if (!grouped[event.date]) grouped[event.date] = [];
+      grouped[event.date].push(event);
+    }
+    Object.keys(grouped).forEach((key) => {
+      grouped[key].sort((a, b) => a.time.localeCompare(b.time));
+    });
+    return grouped;
+  }, [events]);
+
+  const weekDays = useMemo(
+    () => Array.from({ length: 7 }, (_, index) => addDays(weekStart, index)),
+    [weekStart]
+  );
+
+  const selectedDateInVisibleWeek = useMemo(
+    () => weekDays.some((date) => toDateKey(date) === selectedDate),
+    [weekDays, selectedDate]
+  );
+
+  const effectiveSelectedDate = selectedDateInVisibleWeek ? selectedDate : toDateKey(weekStart);
+  const selectedEvents = eventsByDate[effectiveSelectedDate] || [];
+
+  useEffect(() => {
+    if (!selectedDateInVisibleWeek) {
+      setSelectedDate(toDateKey(weekStart));
+    }
+  }, [selectedDateInVisibleWeek, weekStart]);
+
+  useEffect(() => {
+    if (showMonthPicker) {
+      setPickerDate(parseDateKey(effectiveSelectedDate));
+    }
+  }, [showMonthPicker, effectiveSelectedDate]);
+
+  function goWeek(delta: number) {
+    setWeekStart((prev) => addDays(prev, delta * 7));
+  }
+
+  function buildItems(source: string) {
+    return source
+      .split('\n')
+      .map((item) => item.trim())
+      .filter(Boolean);
+  }
+
+  function createEvent() {
+    const trimmedTitle = newEventTitle.trim();
+    if (!trimmedTitle) return;
+
+    const checklist = buildItems(newEventChecklist).map((label, index) => ({
+      id: `c-${Date.now()}-${index}`,
+      label,
+      done: false,
+    }));
+
+    const shoppingList = buildItems(newEventShopping).map((label, index) => ({
+      id: `s-${Date.now()}-${index}`,
+      label,
+      done: false,
+    }));
+
+    const event: CalendarEvent = {
+      id: `event-${Date.now()}`,
+      title: trimmedTitle,
+      date: effectiveSelectedDate,
+      time: newEventTime || '10:00',
+      location: newEventLocation.trim() || 'Brak miejsca',
+      badge: 'Nowe',
+      dotClass: 'bg-indigo-500',
+      badgeClass: 'bg-indigo-500/10 text-indigo-600',
+      note: newEventNote.trim(),
+      checklist,
+      shoppingList,
+    };
+
+    setEvents((prev) => [...prev, event]);
+    setExpandedEventId(event.id);
+    setShowNewEventModal(false);
+    setNewEventTitle('');
+    setNewEventTime('10:00');
+    setNewEventLocation('');
+    setNewEventNote('');
+    setNewEventChecklist('');
+    setNewEventShopping('');
+  }
+
+  function applyMonthPicker(date: Date) {
+    const nextDateKey = toDateKey(date);
+    setSelectedDate(nextDateKey);
+    setWeekStart(startOfWeek(date));
+    setShowMonthPicker(false);
+  }
+
+  function renderMonthGrid() {
+    const monthStart = new Date(pickerDate.getFullYear(), pickerDate.getMonth(), 1);
+    const monthEnd = new Date(pickerDate.getFullYear(), pickerDate.getMonth() + 1, 0);
+    const gridStart = startOfWeek(monthStart);
+    const days = Array.from({ length: 42 }, (_, index) => addDays(gridStart, index));
+
+    return (
+      <div className="grid grid-cols-7 gap-2">
+        {WEEKDAYS_SHORT.map((day) => (
+          <div key={day} className="text-center text-[12px] font-medium text-slate-500">
+            {day}
+          </div>
+        ))}
+
+        {days.map((date) => {
+          const dateKey = toDateKey(date);
+          const isCurrentMonth = date.getMonth() === pickerDate.getMonth();
+          const isSelected = dateKey === effectiveSelectedDate;
+          const hasEvents = (eventsByDate[dateKey] || []).length > 0;
+
+          return (
+            <button
+              key={dateKey}
+              type="button"
+              onClick={() => applyMonthPicker(date)}
+              className={`flex h-10 flex-col items-center justify-center rounded-xl text-[14px] ${
+                isSelected
+                  ? 'bg-indigo-500 text-white'
+                  : isCurrentMonth
+                    ? 'bg-slate-50 text-slate-800'
+                    : 'bg-slate-50/60 text-slate-400'
+              }`}
+            >
+              <span>{date.getDate()}</span>
+              <span className={`mt-1 h-1.5 w-1.5 rounded-full ${hasEvents ? (isSelected ? 'bg-white' : 'bg-indigo-500') : 'bg-transparent'}`} />
+            </button>
+          );
+        })}
+      </div>
+    );
+  }
 
   return (
-    <div className="flex h-full flex-col">
+    <div className="relative flex h-full flex-col">
       <Header
         title="Kalendarz"
         subtitle={copy.version}
@@ -627,47 +951,66 @@ function CalendarScreen() {
 
       <div className="-mx-5 mb-4 bg-[linear-gradient(180deg,#edf1f9_0%,#ebedf5_100%)] px-5 py-4">
         <div className="mb-4 flex items-center justify-between">
-          <ChevronLeft className="h-8 w-8 text-indigo-500" />
-          <div className="flex items-center gap-2 text-[24px] font-semibold text-slate-800">
-            Kwiecień 2024
+          <button type="button" onClick={() => goWeek(-1)} className="rounded-full p-1">
+            <ChevronLeft className="h-8 w-8 text-indigo-500" />
+          </button>
+          <button
+            type="button"
+            onClick={() => setShowMonthPicker(true)}
+            className="flex items-center gap-2 text-[24px] font-semibold text-slate-800"
+          >
+            {formatMonthYear(weekStart)}
             <ChevronDown className="h-6 w-6 text-slate-400" />
-          </div>
-          <ChevronRight className="h-8 w-8 text-indigo-500" />
+          </button>
+          <button type="button" onClick={() => goWeek(1)} className="rounded-full p-1">
+            <ChevronRightIcon className="h-8 w-8 text-indigo-500" />
+          </button>
         </div>
 
         <div className="rounded-[26px] bg-white/80 p-5 shadow-sm">
           <div className="grid grid-cols-7 text-center">
-            {[
-              ['Pon', '22'],
-              ['Wt', '23'],
-              ['Śr', '24'],
-              ['Czw', '25'],
-              ['Pt', '26'],
-              ['Sob', '27'],
-              ['Ndz', '28'],
-            ].map(([day, num], index) => {
-              const active = index === 2;
-              const accent = index === 3 || index === 6;
+            {weekDays.map((date) => {
+              const dateKey = toDateKey(date);
+              const active = dateKey === effectiveSelectedDate;
+              const isWeekend = date.getDay() === 0 || date.getDay() === 6;
+              const hasEvents = (eventsByDate[dateKey] || []).length > 0;
+              const weekdayIndex = date.getDay() === 0 ? 6 : date.getDay() - 1;
+
               return (
-                <div key={day} className="flex flex-col items-center gap-2">
-                  <span className={`text-[14px] font-medium ${accent ? 'text-indigo-500' : 'text-slate-700'}`}>{day}</span>
+                <button
+                  key={dateKey}
+                  type="button"
+                  onClick={() => setSelectedDate(dateKey)}
+                  className="flex flex-col items-center gap-2"
+                >
+                  <span className={`text-[14px] font-medium ${isWeekend ? 'text-indigo-500' : 'text-slate-700'}`}>
+                    {WEEKDAYS_SHORT[weekdayIndex]}
+                  </span>
                   <div
                     className={`flex h-12 w-12 items-center justify-center rounded-full text-[18px] ${
-                      active ? 'bg-indigo-500 text-white' : accent ? 'text-indigo-500' : 'text-slate-800'
+                      active
+                        ? 'bg-indigo-500 text-white'
+                        : isWeekend
+                          ? 'text-indigo-500'
+                          : 'text-slate-800'
                     }`}
                   >
-                    {num}
+                    {date.getDate()}
                   </div>
-                  <div className="h-2.5 w-2.5 rounded-full bg-indigo-500" />
-                </div>
+                  <div className={`h-2.5 w-2.5 rounded-full ${hasEvents ? 'bg-indigo-500' : 'bg-transparent'}`} />
+                </button>
               );
             })}
           </div>
         </div>
 
-        <div className="mt-4 flex items-center justify-between">
-          <h3 className="text-[22px] font-semibold text-slate-800">Czwartek, 24 kwietnia</h3>
-          <button className="flex items-center gap-2 rounded-full bg-[linear-gradient(90deg,#4f75ff,#3b82f6)] px-5 py-3 text-[16px] text-white shadow-sm" type="button">
+        <div className="mt-4 flex items-center justify-between gap-3">
+          <h3 className="text-[22px] font-semibold text-slate-800">{formatDayLabel(effectiveSelectedDate)}</h3>
+          <button
+            onClick={() => setShowNewEventModal(true)}
+            className="flex shrink-0 items-center gap-2 rounded-full bg-[linear-gradient(90deg,#4f75ff,#3b82f6)] px-5 py-3 text-[16px] text-white shadow-sm"
+            type="button"
+          >
             <Plus className="h-5 w-5" />
             Nowe wydarzenie
           </button>
@@ -675,29 +1018,269 @@ function CalendarScreen() {
       </div>
 
       <div className="-mx-5 min-h-0 flex-1 overflow-y-auto bg-white/20 px-5 pb-2">
-        <div className="space-y-0">
-          {events.map(([time, title, subtitle, badge, dotClass, badgeClass]) => (
-            <div key={title} className="grid grid-cols-[88px_1fr] border-b border-indigo-100 py-4">
-              <div className="text-[18px] text-slate-500">{time}</div>
-              <div className="flex items-start justify-between gap-4">
-                <div className="min-w-0">
-                  <div className="flex items-center gap-3">
-                    <div className={`h-5 w-5 shrink-0 rounded-full ${dotClass}`} />
-                    <div className="text-[18px] font-semibold text-slate-800">{title}</div>
-                  </div>
-                  <div className="ml-8 mt-2 flex items-center gap-2 text-[14px] text-slate-500">
-                    <MapPin className="h-4 w-4" />
-                    <span className="truncate">{subtitle}</span>
-                  </div>
+        {selectedEvents.length === 0 ? (
+          <div className="rounded-[24px] bg-white/70 px-5 py-6 text-[16px] text-slate-500 shadow-sm">
+            Brak wydarzeń na ten dzień.
+          </div>
+        ) : (
+          <div className="space-y-0">
+            {selectedEvents.map((event) => {
+              const expanded = expandedEventId === event.id;
+
+              return (
+                <div key={event.id} className="border-b border-indigo-100 py-4">
+                  <button
+                    type="button"
+                    onClick={() => setExpandedEventId(expanded ? null : event.id)}
+                    className="grid w-full grid-cols-[88px_1fr] text-left"
+                  >
+                    <div className="text-[18px] text-slate-500">{event.time}</div>
+                    <div className="flex items-start justify-between gap-4">
+                      <div className="min-w-0">
+                        <div className="flex items-center gap-3">
+                          <div className={`h-5 w-5 shrink-0 rounded-full ${event.dotClass}`} />
+                          <div className="text-[18px] font-semibold text-slate-800">{event.title}</div>
+                        </div>
+                        <div className="ml-8 mt-2 flex items-center gap-2 text-[14px] text-slate-500">
+                          <MapPin className="h-4 w-4" />
+                          <span className="truncate">{event.location}</span>
+                        </div>
+                      </div>
+                      <div className="flex items-center gap-3">
+                        <div className={`shrink-0 rounded-xl px-3 py-1.5 text-[14px] font-medium ${event.badgeClass}`}>
+                          {event.badge}
+                        </div>
+                        {expanded ? (
+                          <ChevronUp className="h-5 w-5 text-slate-400" />
+                        ) : (
+                          <ChevronDown className="h-5 w-5 text-slate-400" />
+                        )}
+                      </div>
+                    </div>
+                  </button>
+
+                  {expanded ? (
+                    <div className="ml-[88px] mt-4 rounded-[20px] bg-white/70 p-4 shadow-sm">
+                      <div className="space-y-4">
+                        <div>
+                          <div className="mb-1 text-[13px] font-semibold uppercase tracking-wide text-slate-400">
+                            Miejsce
+                          </div>
+                          <div className="text-[15px] text-slate-700">{event.location}</div>
+                        </div>
+
+                        <div>
+                          <div className="mb-1 text-[13px] font-semibold uppercase tracking-wide text-slate-400">
+                            Notatka
+                          </div>
+                          <div className="text-[15px] text-slate-700">
+                            {event.note?.trim() ? event.note : 'Brak notatki.'}
+                          </div>
+                        </div>
+
+                        <div>
+                          <div className="mb-2 text-[13px] font-semibold uppercase tracking-wide text-slate-400">
+                            Checklista
+                          </div>
+                          <div className="space-y-2">
+                            {event.checklist && event.checklist.length > 0 ? (
+                              event.checklist.map((item) => (
+                                <div key={item.id} className="flex items-center gap-3 text-[15px] text-slate-700">
+                                  {item.done ? (
+                                    <Check className="h-4 w-4 text-indigo-500" />
+                                  ) : (
+                                    <Square className="h-4 w-4 text-slate-400" />
+                                  )}
+                                  <span>{item.label}</span>
+                                </div>
+                              ))
+                            ) : (
+                              <div className="text-[15px] text-slate-500">Brak checklisty.</div>
+                            )}
+                          </div>
+                        </div>
+
+                        <div>
+                          <div className="mb-2 text-[13px] font-semibold uppercase tracking-wide text-slate-400">
+                            Lista zakupów
+                          </div>
+                          <div className="space-y-2">
+                            {event.shoppingList && event.shoppingList.length > 0 ? (
+                              event.shoppingList.map((item) => (
+                                <div key={item.id} className="flex items-center gap-3 text-[15px] text-slate-700">
+                                  {item.done ? (
+                                    <Check className="h-4 w-4 text-indigo-500" />
+                                  ) : (
+                                    <Square className="h-4 w-4 text-slate-400" />
+                                  )}
+                                  <span>{item.label}</span>
+                                </div>
+                              ))
+                            ) : (
+                              <div className="text-[15px] text-slate-500">Brak listy zakupów.</div>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  ) : null}
                 </div>
-                <div className={`shrink-0 rounded-xl px-3 py-1.5 text-[14px] font-medium ${badgeClass}`}>
-                  {badge}
-                </div>
-              </div>
-            </div>
-          ))}
-        </div>
+              );
+            })}
+          </div>
+        )}
       </div>
+
+      {showMonthPicker ? (
+        <div className="absolute inset-0 z-30 flex items-center justify-center bg-slate-900/20 px-4">
+          <div className="w-full max-w-[360px] rounded-[28px] bg-white p-5 shadow-[0_20px_60px_rgba(15,23,42,0.18)]">
+            <div className="mb-4 flex items-center justify-between">
+              <div className="text-[20px] font-semibold text-slate-800">Wybierz miesiąc</div>
+              <button type="button" onClick={() => setShowMonthPicker(false)}>
+                <X className="h-5 w-5 text-slate-400" />
+              </button>
+            </div>
+
+            <div className="mb-4 flex items-center justify-between gap-3">
+              <button
+                type="button"
+                onClick={() => setPickerDate(new Date(pickerDate.getFullYear() - 1, pickerDate.getMonth(), 1))}
+                className="rounded-full bg-slate-100 px-3 py-2 text-[14px] text-slate-700"
+              >
+                - Rok
+              </button>
+
+              <div className="text-[18px] font-semibold text-slate-800">
+                {MONTHS_PL[pickerDate.getMonth()]} {pickerDate.getFullYear()}
+              </div>
+
+              <button
+                type="button"
+                onClick={() => setPickerDate(new Date(pickerDate.getFullYear() + 1, pickerDate.getMonth(), 1))}
+                className="rounded-full bg-slate-100 px-3 py-2 text-[14px] text-slate-700"
+              >
+                + Rok
+              </button>
+            </div>
+
+            <div className="mb-4 grid grid-cols-3 gap-2">
+              {MONTHS_PL.map((month, index) => (
+                <button
+                  key={month}
+                  type="button"
+                  onClick={() => setPickerDate(new Date(pickerDate.getFullYear(), index, 1))}
+                  className={`rounded-2xl px-3 py-2 text-[14px] ${
+                    pickerDate.getMonth() === index
+                      ? 'bg-indigo-500 text-white'
+                      : 'bg-slate-100 text-slate-700'
+                  }`}
+                >
+                  {month}
+                </button>
+              ))}
+            </div>
+
+            {renderMonthGrid()}
+          </div>
+        </div>
+      ) : null}
+
+      {showNewEventModal ? (
+        <div className="absolute inset-0 z-30 flex items-center justify-center bg-slate-900/20 px-4">
+          <div className="max-h-[88%] w-full max-w-[370px] overflow-y-auto rounded-[28px] bg-white p-5 shadow-[0_20px_60px_rgba(15,23,42,0.18)]">
+            <div className="mb-4 flex items-center justify-between">
+              <div>
+                <div className="text-[20px] font-semibold text-slate-800">Nowe wydarzenie</div>
+                <div className="mt-1 text-[14px] text-slate-500">{formatDayLabel(effectiveSelectedDate)}</div>
+              </div>
+              <button type="button" onClick={() => setShowNewEventModal(false)}>
+                <X className="h-5 w-5 text-slate-400" />
+              </button>
+            </div>
+
+            <div className="space-y-3">
+              <label className="block">
+                <div className="mb-1 text-[13px] font-medium text-slate-500">Tytuł</div>
+                <input
+                  value={newEventTitle}
+                  onChange={(e) => setNewEventTitle(e.target.value)}
+                  className="w-full rounded-2xl border border-slate-200 px-4 py-3 text-[15px] outline-none"
+                  placeholder="Np. Zakupy na weekend"
+                />
+              </label>
+
+              <div className="grid grid-cols-2 gap-3">
+                <label className="block">
+                  <div className="mb-1 text-[13px] font-medium text-slate-500">Godzina</div>
+                  <input
+                    type="time"
+                    value={newEventTime}
+                    onChange={(e) => setNewEventTime(e.target.value)}
+                    className="w-full rounded-2xl border border-slate-200 px-4 py-3 text-[15px] outline-none"
+                  />
+                </label>
+
+                <label className="block">
+                  <div className="mb-1 text-[13px] font-medium text-slate-500">Miejsce</div>
+                  <input
+                    value={newEventLocation}
+                    onChange={(e) => setNewEventLocation(e.target.value)}
+                    className="w-full rounded-2xl border border-slate-200 px-4 py-3 text-[15px] outline-none"
+                    placeholder="Np. Lidl / Dom / Online"
+                  />
+                </label>
+              </div>
+
+              <label className="block">
+                <div className="mb-1 text-[13px] font-medium text-slate-500">Notatka</div>
+                <textarea
+                  value={newEventNote}
+                  onChange={(e) => setNewEventNote(e.target.value)}
+                  className="min-h-[90px] w-full rounded-2xl border border-slate-200 px-4 py-3 text-[15px] outline-none"
+                  placeholder="Krótka notatka do wydarzenia"
+                />
+              </label>
+
+              <label className="block">
+                <div className="mb-1 text-[13px] font-medium text-slate-500">Checklista</div>
+                <textarea
+                  value={newEventChecklist}
+                  onChange={(e) => setNewEventChecklist(e.target.value)}
+                  className="min-h-[90px] w-full rounded-2xl border border-slate-200 px-4 py-3 text-[15px] outline-none"
+                  placeholder="Jedna pozycja w linii&#10;Np. Kupić bilet&#10;Sprawdzić agendę"
+                />
+              </label>
+
+              <label className="block">
+                <div className="mb-1 text-[13px] font-medium text-slate-500">Lista zakupów</div>
+                <textarea
+                  value={newEventShopping}
+                  onChange={(e) => setNewEventShopping(e.target.value)}
+                  className="min-h-[90px] w-full rounded-2xl border border-slate-200 px-4 py-3 text-[15px] outline-none"
+                  placeholder="Jedna pozycja w linii&#10;Np. Mleko&#10;Pieczywo"
+                />
+              </label>
+            </div>
+
+            <div className="mt-5 flex items-center justify-end gap-3">
+              <button
+                type="button"
+                onClick={() => setShowNewEventModal(false)}
+                className="rounded-full bg-slate-100 px-4 py-2.5 text-[15px] text-slate-700"
+              >
+                Anuluj
+              </button>
+              <button
+                type="button"
+                onClick={createEvent}
+                className="rounded-full bg-[linear-gradient(90deg,#4f75ff,#3b82f6)] px-5 py-2.5 text-[15px] text-white"
+              >
+                Dodaj wydarzenie
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }
