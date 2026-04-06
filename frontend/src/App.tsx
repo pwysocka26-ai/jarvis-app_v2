@@ -69,6 +69,7 @@ type CalendarEvent = {
   note?: string;
   checklist?: CalendarChecklistItem[];
   linkedShoppingItemIds?: string[];
+  shoppingItems?: ShoppingPoolItem[];
 };
 
 const copy = {
@@ -868,6 +869,7 @@ function CalendarScreen({
       note: newEventNote.trim(),
       checklist: shoppingEvent ? [] : buildChecklistItems(newEventChecklist),
       linkedShoppingItemIds: [],
+      shoppingItems: [],
     };
 
     setEvents((prev) => [...prev, event]);
@@ -915,18 +917,27 @@ function CalendarScreen({
     );
   }
 
-  function addShoppingPoolItem() {
+  function addShoppingPoolItem(eventId?: string) {
     const trimmed = newShoppingPoolItem.trim();
-    if (!trimmed) return;
+    if (!trimmed || !eventId) return;
 
-    setShoppingPool((prev) => {
-      const exists = prev.some((item) => item.label.toLowerCase() === trimmed.toLowerCase());
-      if (exists) return prev;
-      return [
-        ...prev,
-        { id: `pool-${Date.now()}`, label: trimmed, done: false, linkedEventIds: [] },
-      ];
-    });
+    const localItem: ShoppingPoolItem = {
+      id: `local-${Date.now()}`,
+      label: trimmed,
+      done: false,
+      linkedEventIds: [eventId],
+    };
+
+    setEvents((prev) =>
+      prev.map((event) =>
+        event.id !== eventId
+          ? event
+          : {
+              ...event,
+              shoppingItems: [...(event.shoppingItems || []), localItem],
+            }
+      )
+    );
 
     setNewShoppingPoolItem('');
   }
@@ -1130,8 +1141,11 @@ function CalendarScreen({
               const linkedPoolItems = shoppingPool.filter((item) =>
                 (event.linkedShoppingItemIds || []).includes(item.id)
               );
+              const localEventItems = event.shoppingItems || [];
               const suggestedPoolItems = shoppingPool.filter(
-                (item) => !(event.linkedShoppingItemIds || []).includes(item.id)
+                (item) =>
+                  item.linkedEventIds.length === 0 &&
+                  !(event.linkedShoppingItemIds || []).includes(item.id)
               );
 
               return (
@@ -1234,8 +1248,120 @@ function CalendarScreen({
                             </div>
 
                             <div className="space-y-2">
-                              {linkedPoolItems.length > 0 ? (
-                                linkedPoolItems.map((item) => (
+                              {linkedPoolItems.length > 0 || localEventItems.length > 0 ? (
+                                <>
+                                  {localEventItems.map((item) => (
+                                    <div
+                                      key={item.id}
+                                      className="rounded-2xl bg-slate-50 px-3 py-2"
+                                    >
+                                      <div className="flex items-center justify-between gap-3">
+                                        <button
+                                          type="button"
+                                          onClick={() =>
+                                            setEvents((prev) =>
+                                              prev.map((currentEvent) =>
+                                                currentEvent.id !== event.id
+                                                  ? currentEvent
+                                                  : {
+                                                      ...currentEvent,
+                                                      shoppingItems: (currentEvent.shoppingItems || []).map(
+                                                        (shoppingItem) =>
+                                                          shoppingItem.id === item.id
+                                                            ? {
+                                                                ...shoppingItem,
+                                                                done: !shoppingItem.done,
+                                                              }
+                                                            : shoppingItem
+                                                      ),
+                                                    }
+                                              )
+                                            )
+                                          }
+                                          className="flex min-w-0 items-center gap-3 text-left text-[15px] text-slate-700"
+                                        >
+                                          {item.done ? (
+                                            <Check className="h-4 w-4 shrink-0 text-indigo-500" />
+                                          ) : (
+                                            <Square className="h-4 w-4 shrink-0 text-slate-400" />
+                                          )}
+                                          <span className={item.done ? 'line-through text-slate-400' : ''}>
+                                            {item.label}
+                                          </span>
+                                        </button>
+
+                                        <div className="flex items-center gap-2">
+                                          <button
+                                            type="button"
+                                            onClick={() => {
+                                              setEvents((prev) =>
+                                                prev.map((currentEvent) =>
+                                                  currentEvent.id !== event.id
+                                                    ? currentEvent
+                                                    : {
+                                                        ...currentEvent,
+                                                        shoppingItems: (currentEvent.shoppingItems || []).filter(
+                                                          (shoppingItem) => shoppingItem.id !== item.id
+                                                        ),
+                                                      }
+                                                )
+                                              );
+
+                                              setShoppingPool((prev) => {
+                                                const exists = prev.some(
+                                                  (shoppingItem) =>
+                                                    shoppingItem.label.toLowerCase() === item.label.toLowerCase() &&
+                                                    shoppingItem.linkedEventIds.length === 0
+                                                );
+
+                                                if (exists) {
+                                                  return prev;
+                                                }
+
+                                                return [
+                                                  ...prev,
+                                                  {
+                                                    id: `pool-${Date.now()}`,
+                                                    label: item.label,
+                                                    done: item.done,
+                                                    linkedEventIds: [],
+                                                  },
+                                                ];
+                                              });
+                                            }}
+                                            className="rounded-full bg-amber-50 p-2 text-amber-600"
+                                            title="Odepnij do ogólnej listy zakupów"
+                                          >
+                                            <Unlink className="h-4 w-4" />
+                                          </button>
+
+                                          <button
+                                            type="button"
+                                            onClick={() =>
+                                              setEvents((prev) =>
+                                                prev.map((currentEvent) =>
+                                                  currentEvent.id !== event.id
+                                                    ? currentEvent
+                                                    : {
+                                                        ...currentEvent,
+                                                        shoppingItems: (currentEvent.shoppingItems || []).filter(
+                                                          (shoppingItem) => shoppingItem.id !== item.id
+                                                        ),
+                                                      }
+                                                )
+                                              )
+                                            }
+                                            className="rounded-full bg-rose-50 p-2 text-rose-500"
+                                            title="Usuń z tego wydarzenia"
+                                          >
+                                            <Trash2 className="h-4 w-4" />
+                                          </button>
+                                        </div>
+                                      </div>
+                                    </div>
+                                  ))}
+
+                                  {linkedPoolItems.map((item) => (
                                   <div
                                     key={item.id}
                                     className="rounded-2xl bg-slate-50 px-3 py-2"
@@ -1277,7 +1403,8 @@ function CalendarScreen({
                                       </div>
                                     </div>
                                   </div>
-                                ))
+                                ))}
+                                </>
                               ) : (
                                 <div className="text-[15px] text-slate-500">Brak przypiętych produktów.</div>
                               )}
@@ -1331,7 +1458,7 @@ function CalendarScreen({
                                 />
                                 <button
                                   type="button"
-                                  onClick={addShoppingPoolItem}
+                                  onClick={() => addShoppingPoolItem(event.id)}
                                   className="rounded-full bg-[linear-gradient(90deg,#4f75ff,#3b82f6)] px-4 py-2.5 text-[14px] text-white"
                                 >
                                   Dodaj
@@ -1705,6 +1832,7 @@ export default function App() {
         { id: '1-2', label: 'Mata', done: false },
       ],
       linkedShoppingItemIds: [],
+      shoppingItems: [],
     },
     {
       id: '2',
@@ -1721,6 +1849,7 @@ export default function App() {
         { id: '2-2', label: 'Podsumowanie sprintu', done: false },
       ],
       linkedShoppingItemIds: [],
+      shoppingItems: [],
     },
     {
       id: '3',
@@ -1734,6 +1863,7 @@ export default function App() {
       note: 'Rezerwacja na nazwisko Wysocka.',
       checklist: [],
       linkedShoppingItemIds: [],
+      shoppingItems: [],
     },
     {
       id: '4',
@@ -1750,6 +1880,7 @@ export default function App() {
         { id: '4-2', label: 'Demo', done: false },
       ],
       linkedShoppingItemIds: [],
+      shoppingItems: [],
     },
     {
       id: '5',
@@ -1762,6 +1893,7 @@ export default function App() {
       badgeClass: 'bg-rose-500/10 text-rose-600',
       note: 'Sprawdź, co już jest w domu.',
       linkedShoppingItemIds: ['pool-1', 'pool-2'],
+      shoppingItems: [],
     },
     {
       id: '6',
@@ -1775,6 +1907,7 @@ export default function App() {
       note: 'Dzień nóg + rozciąganie.',
       checklist: [{ id: '6-1', label: 'Karnet', done: true }],
       linkedShoppingItemIds: [],
+      shoppingItems: [],
     },
   ];
 
@@ -1893,3 +2026,6 @@ export default function App() {
     </PhoneShell>
   );
 }
+
+
+
