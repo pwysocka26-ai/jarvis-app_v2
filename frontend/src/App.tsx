@@ -57,6 +57,16 @@ type ShoppingPoolItem = {
   linkedEventIds: string[];
 };
 
+type ProjectCategory = 'shopping' | 'reading' | 'ideas' | 'to_check' | 'general';
+
+type ProjectItem = {
+  id: string;
+  label: string;
+  category: ProjectCategory;
+  done: boolean;
+  source: 'chat' | 'manual' | 'calendar';
+};
+
 type CalendarEvent = {
   id: string;
   title: string;
@@ -197,6 +207,121 @@ function extractShoppingItemFromChat(text: string) {
   }
 
   return null;
+}
+
+
+function extractProjectCategoryFromChat(text: string): ProjectCategory {
+  const normalized = text.trim().toLowerCase();
+
+  if (
+    normalized.includes('kupić') ||
+    normalized.includes('kupic') ||
+    normalized.includes('kup ') ||
+    normalized.includes('zakupy') ||
+    normalized.includes('potrzebuję') ||
+    normalized.includes('potrzebuje')
+  ) {
+    return 'shopping';
+  }
+
+  if (
+    normalized.includes('przeczytać') ||
+    normalized.includes('przeczytac') ||
+    normalized.includes('książk') ||
+    normalized.includes('ksiazk') ||
+    normalized.includes('artykuł') ||
+    normalized.includes('artykul')
+  ) {
+    return 'reading';
+  }
+
+  if (
+    normalized.includes('pomysł') ||
+    normalized.includes('pomysl') ||
+    normalized.includes('idea') ||
+    normalized.includes('mam pomysł') ||
+    normalized.includes('mam pomysl')
+  ) {
+    return 'ideas';
+  }
+
+  if (
+    normalized.includes('sprawdzić') ||
+    normalized.includes('sprawdzic') ||
+    normalized.includes('ogarnąć') ||
+    normalized.includes('ogarnac') ||
+    normalized.includes('przetestować') ||
+    normalized.includes('przetestowac')
+  ) {
+    return 'to_check';
+  }
+
+  return 'general';
+}
+
+function looksLikeUndatedThought(text: string) {
+  const normalized = text.trim().toLowerCase();
+
+  const timeIndicators = [
+    'jutro',
+    'pojutrze',
+    'za tydzień',
+    'za tydzien',
+    'za miesiąc',
+    'za miesiac',
+    'w poniedziałek',
+    'w poniedzialek',
+    'we wtorek',
+    'w środę',
+    'w srode',
+    'w czwartek',
+    'w piątek',
+    'w piatek',
+    'w sobotę',
+    'w sobote',
+    'w niedzielę',
+    'w niedziele',
+    'dziś o',
+    'dzis o',
+    'o 1',
+    'o 2',
+    'o 3',
+    'o 4',
+    'o 5',
+    'o 6',
+    'o 7',
+    'o 8',
+    'o 9',
+    'o 10',
+    'o 11',
+    'o 12',
+    'o 13',
+    'o 14',
+    'o 15',
+    'o 16',
+    'o 17',
+    'o 18',
+    'o 19',
+    'o 20',
+  ];
+
+  return !timeIndicators.some((indicator) => normalized.includes(indicator));
+}
+
+function projectCategoryLabel(category: ProjectCategory) {
+  switch (category) {
+    case 'shopping':
+      return 'Lista zakupów';
+    case 'reading':
+      return 'Do przeczytania';
+    case 'ideas':
+      return 'Pomysły';
+    case 'to_check':
+      return 'Do sprawdzenia';
+    case 'general':
+    default:
+      return 'Ogólne';
+  }
 }
 
 function Header({
@@ -572,10 +697,12 @@ function PlanScreen() {
 
 function ChatScreen({
   onShoppingDetected,
+  onProjectDetected,
   chatMessages,
   setChatMessages,
 }: {
   onShoppingDetected: (itemLabel: string) => void;
+  onProjectDetected: (text: string) => void;
   chatMessages: ChatMessage[];
   setChatMessages: React.Dispatch<React.SetStateAction<ChatMessage[]>>;
 }) {
@@ -605,12 +732,27 @@ function ChatScreen({
     const extractedShoppingItem = extractShoppingItemFromChat(trimmed);
     if (extractedShoppingItem) {
       onShoppingDetected(extractedShoppingItem);
+      onProjectDetected(trimmed);
       setChatMessages((prev) => [
         ...prev,
         {
           id: `local-${Date.now()}`,
           role: 'assistant',
-          text: `Dodałem do listy zakupów: ${extractedShoppingItem}. Możesz później podpiąć to do wydarzenia zakupowego w kalendarzu.`,
+          text: `Dodałem do listy zakupów: ${extractedShoppingItem}. Zapisałem to też w Projektach.`,
+        },
+      ]);
+      inputRef.current?.focus();
+      return;
+    }
+
+    if (looksLikeUndatedThought(trimmed)) {
+      onProjectDetected(trimmed);
+      setChatMessages((prev) => [
+        ...prev,
+        {
+          id: `local-${Date.now()}`,
+          role: 'assistant',
+          text: 'Zapisałem to w Projektach jako rzecz bez konkretnej daty.',
         },
       ]);
       inputRef.current?.focus();
@@ -1628,54 +1770,98 @@ function CalendarScreen({
 }
 
 function ProjectsScreen({
-  shoppingPool,
+  projectItems,
+  setProjectItems,
 }: {
-  shoppingPool: ShoppingPoolItem[];
+  projectItems: ProjectItem[];
+  setProjectItems: React.Dispatch<React.SetStateAction<ProjectItem[]>>;
 }) {
-  const groups = useMemo(
-    () => [
+  const [newProjectItem, setNewProjectItem] = useState('');
+
+  function addManualProjectItem() {
+    const trimmed = newProjectItem.trim();
+    if (!trimmed) return;
+
+    setProjectItems((prev) => [
+      ...prev,
       {
-        title: 'Ogólne',
-        count: '5',
-        icon: <Box className="h-7 w-7 text-indigo-400" />,
-        items: [
-          'Umówić spotkanie z zespołem',
-          'Jak poprawić stronę główną?',
-          'Przestać raport kwartalny',
-          'Kupić prezent na urodziny Ani',
-          'Znaleźć dobrą aplikację do CRM',
-        ],
+        id: `project-${Date.now()}`,
+        label: trimmed,
+        category: extractProjectCategoryFromChat(trimmed),
+        done: false,
+        source: 'manual',
       },
-      {
-        title: 'Lista zakupów',
-        count: String(shoppingPool.length),
-        icon: <ShoppingCart className="h-7 w-7 text-indigo-400" />,
-        items: shoppingPool.map((item) => item.label),
-      },
-      {
-        title: 'Pomysły',
-        count: '6',
-        icon: <Lightbulb className="h-7 w-7 text-indigo-400" />,
-        items: ['Pomysły na opis nowego projektu', 'Nowy artykuł na bloga o produktywności'],
-      },
-      {
-        title: 'Przeczytać',
-        count: '4',
-        icon: <BookOpen className="h-7 w-7 text-indigo-400" />,
-        items: [],
-      },
-    ],
-    [shoppingPool]
-  );
+    ]);
+
+    setNewProjectItem('');
+  }
+
+  function toggleProjectItem(itemId: string) {
+    setProjectItems((prev) =>
+      prev.map((item) => (item.id === itemId ? { ...item, done: !item.done } : item))
+    );
+  }
+
+  function removeProjectItem(itemId: string) {
+    setProjectItems((prev) => prev.filter((item) => item.id !== itemId));
+  }
+
+  const groups = useMemo(() => {
+    const categories: ProjectCategory[] = ['general', 'shopping', 'ideas', 'reading', 'to_check'];
+
+    return categories.map((category) => {
+      const items = projectItems.filter((item) => item.category === category);
+
+      const icon =
+        category === 'shopping' ? (
+          <ShoppingCart className="h-7 w-7 text-indigo-400" />
+        ) : category === 'reading' ? (
+          <BookOpen className="h-7 w-7 text-indigo-400" />
+        ) : category === 'ideas' ? (
+          <Lightbulb className="h-7 w-7 text-indigo-400" />
+        ) : category === 'to_check' ? (
+          <Search className="h-7 w-7 text-indigo-400" />
+        ) : (
+          <Box className="h-7 w-7 text-indigo-400" />
+        );
+
+      return {
+        key: category,
+        title: projectCategoryLabel(category),
+        count: String(items.length),
+        icon,
+        items,
+      };
+    });
+  }, [projectItems]);
 
   return (
     <div className="flex h-full flex-col">
       <Header title="Projekty" subtitle={copy.version} icon={<Package className="h-10 w-10 text-indigo-300" />} />
-      <SearchBar />
+      <SearchBar placeholder="Szukaj w projektach..." />
+
+      <div className="mb-4 rounded-[22px] bg-white/75 p-4 shadow-sm">
+        <div className="mb-2 text-[14px] font-medium text-slate-500">Dodaj luźną myśl do Projektów</div>
+        <div className="flex items-center gap-2">
+          <input
+            value={newProjectItem}
+            onChange={(e) => setNewProjectItem(e.target.value)}
+            className="flex-1 rounded-2xl border border-slate-200 px-4 py-3 text-[15px] outline-none"
+            placeholder='Np. Muszę przeczytać książkę "Tysiąc mil podwodnej żeglugi"'
+          />
+          <button
+            type="button"
+            onClick={addManualProjectItem}
+            className="rounded-full bg-[linear-gradient(90deg,#4f75ff,#3b82f6)] px-4 py-3 text-[14px] text-white"
+          >
+            Dodaj
+          </button>
+        </div>
+      </div>
 
       <div className="min-h-0 flex-1 space-y-4 overflow-y-auto pr-1">
-        {groups.map((group, groupIndex) => (
-          <div key={group.title}>
+        {groups.map((group) => (
+          <div key={group.key}>
             <div className="mb-3 flex items-center justify-between">
               <div className="flex items-center gap-3">
                 {group.icon}
@@ -1692,29 +1878,39 @@ function ProjectsScreen({
 
             <div className="rounded-[22px] bg-white/75 p-3 shadow-sm">
               {group.items.length === 0 ? (
-                <div className="h-20 rounded-[18px] bg-white/40" />
+                <div className="px-3 py-4 text-[15px] text-slate-400">Brak pozycji w tej kategorii.</div>
               ) : (
-                group.items.map((item, itemIndex) => (
+                group.items.map((item) => (
                   <div
-                    key={item}
-                    className={`flex items-center justify-between gap-3 px-3 py-3 ${
-                      itemIndex !== group.items.length - 1 ? 'border-b border-slate-200' : ''
-                    }`}
+                    key={item.id}
+                    className="flex items-center justify-between gap-3 border-b border-slate-200 px-3 py-3 last:border-b-0"
                   >
-                    <div className="flex min-w-0 items-center gap-3">
-                      <div className={`h-7 w-7 rounded-md border-2 ${groupIndex === 0 && itemIndex === 0 ? 'border-indigo-300 bg-indigo-50' : 'border-slate-300'}`}>
-                        {groupIndex === 0 && itemIndex === 0 ? (
-                          <Check className="m-0.5 h-5 w-5 text-indigo-400" />
-                        ) : null}
+                    <button
+                      type="button"
+                      onClick={() => toggleProjectItem(item.id)}
+                      className="flex min-w-0 items-center gap-3 text-left"
+                    >
+                      <div className={`flex h-7 w-7 items-center justify-center rounded-md border-2 ${item.done ? 'border-indigo-300 bg-indigo-50' : 'border-slate-300'}`}>
+                        {item.done ? <Check className="h-5 w-5 text-indigo-400" /> : null}
                       </div>
-                      <span className="truncate text-[17px] text-slate-700">{item}</span>
-                    </div>
+                      <div className="min-w-0">
+                        <div className={`truncate text-[17px] ${item.done ? 'text-slate-400 line-through' : 'text-slate-700'}`}>
+                          {item.label}
+                        </div>
+                        <div className="text-[12px] text-slate-400">
+                          {item.source === 'chat' ? 'Z czatu' : item.source === 'manual' ? 'Dodane ręcznie' : 'Z kalendarza'}
+                        </div>
+                      </div>
+                    </button>
 
-                    {groupIndex === 0 ? (
-                      <div className="rounded-xl bg-indigo-50 px-3 py-1 text-[16px] font-medium text-indigo-400">
-                        {[5, 3, 6, 4, 2][itemIndex] ?? 1}
-                      </div>
-                    ) : null}
+                    <button
+                      type="button"
+                      onClick={() => removeProjectItem(item.id)}
+                      className="rounded-full bg-rose-50 p-2 text-rose-500"
+                      title="Usuń z projektów"
+                    >
+                      <Trash2 className="h-4 w-4" />
+                    </button>
                   </div>
                 ))
               )}
@@ -1918,6 +2114,14 @@ export default function App() {
     { id: 'pool-4', label: 'Makaron', done: false, linkedEventIds: [] },
   ];
 
+  const defaultProjectItems: ProjectItem[] = [
+    { id: 'project-1', label: 'Umówić spotkanie z zespołem', category: 'general', done: false, source: 'manual' },
+    { id: 'project-2', label: 'Muszę przeczytać książkę "Tysiąc mil podwodnej żeglugi"', category: 'reading', done: false, source: 'manual' },
+    { id: 'project-3', label: 'Mam pomysł na tracker', category: 'ideas', done: false, source: 'manual' },
+    { id: 'project-4', label: 'Sprawdzić dobrą aplikację do CRM', category: 'to_check', done: false, source: 'manual' },
+    { id: 'project-5', label: 'Kupić prezent na urodziny Ani', category: 'shopping', done: false, source: 'manual' },
+  ];
+
   const [activeTab, setActiveTab] = useState<TabId>('home');
   const [shoppingPool, setShoppingPool] = useState<ShoppingPoolItem[]>(() => {
     try {
@@ -1941,6 +2145,17 @@ export default function App() {
     }
   });
 
+  const [projectItems, setProjectItems] = useState<ProjectItem[]>(() => {
+    try {
+      const raw = window.localStorage.getItem(STORAGE_KEY);
+      if (!raw) return defaultProjectItems;
+      const parsed = JSON.parse(raw);
+      return parsed.projectItems ?? defaultProjectItems;
+    } catch {
+      return defaultProjectItems;
+    }
+  });
+
   const [chatMessages, setChatMessages] = useState<ChatMessage[]>(() => {
     try {
       const raw = window.localStorage.getItem(STORAGE_KEY);
@@ -1959,13 +2174,14 @@ export default function App() {
         JSON.stringify({
           shoppingPool,
           events,
+          projectItems,
           chatMessages,
         })
       );
     } catch {
       // ignore local storage errors
     }
-  }, [shoppingPool, events, chatMessages]);
+  }, [shoppingPool, events, projectItems, chatMessages]);
 
   function handleShoppingDetected(itemLabel: string) {
     setShoppingPool((prev) => {
@@ -1983,6 +2199,29 @@ export default function App() {
     });
   }
 
+  function handleProjectDetected(text: string) {
+    const trimmed = text.trim();
+    if (!trimmed) return;
+
+    const category = extractProjectCategoryFromChat(trimmed);
+
+    setProjectItems((prev) => {
+      const exists = prev.some((item) => item.label.toLowerCase() === trimmed.toLowerCase());
+      if (exists) return prev;
+
+      return [
+        ...prev,
+        {
+          id: `project-${Date.now()}`,
+          label: trimmed,
+          category,
+          done: false,
+          source: 'chat',
+        },
+      ];
+    });
+  }
+
   let screen: React.ReactNode;
 
   switch (activeTab) {
@@ -1990,6 +2229,7 @@ export default function App() {
       screen = (
         <ChatScreen
           onShoppingDetected={handleShoppingDetected}
+          onProjectDetected={handleProjectDetected}
           chatMessages={chatMessages}
           setChatMessages={setChatMessages}
         />
@@ -2009,7 +2249,7 @@ export default function App() {
       );
       break;
     case 'projects':
-      screen = <ProjectsScreen shoppingPool={shoppingPool} />;
+      screen = <ProjectsScreen projectItems={projectItems} setProjectItems={setProjectItems} />;
       break;
     case 'settings':
       screen = <SettingsScreen />;
