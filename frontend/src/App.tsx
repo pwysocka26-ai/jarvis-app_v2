@@ -32,6 +32,8 @@ import {
   ClipboardList,
   X,
   Square,
+  Trash2,
+  Unlink,
 } from 'lucide-react';
 
 type TabId = 'home' | 'chat' | 'plan' | 'calendar' | 'projects' | 'settings';
@@ -73,22 +75,22 @@ const copy = {
   version: 'Wersja 9.7.5',
   beta: 'BETA',
   welcome: 'Witaj Mateusz!',
-  wave: 'đź‘‹',
-  todayLine1: 'Masz dziĹ› ',
-  tasks10: '10 zadaĹ„',
+  wave: '👋',
+  todayLine1: 'Masz dziś ',
+  tasks10: '10 zadań',
   todayLine2: ' i ',
   meeting1: '1 spotkanie',
   todayLine3: ' o ',
   todayLine4: '11:00',
   cardToday: 'Dzisiaj',
   cardTodo: 'Do zrobienia',
-  cardWeek: 'Ten tydzieĹ„',
+  cardWeek: 'Ten tydzień',
   cardProjects: 'Projekty',
-  tasksLabel: 'zadaĹ„',
-  upcoming: 'NadchodzÄ…ce',
+  tasksLabel: 'zadań',
+  upcoming: 'Nadchodzące',
   seeAll: 'Zobacz wszystko',
-  event1: 'UmĂłwione spotkanie z zespoĹ‚em',
-  event2: 'PrzeglÄ…d zadaĹ„ tygodniowych',
+  event1: 'Umówione spotkanie z zespołem',
+  event2: 'Przegląd zadań tygodniowych',
   meetingTag: 'Spotkanie',
   taskTag: 'Zadanie',
   navHome: 'Home',
@@ -99,22 +101,22 @@ const copy = {
 };
 
 const OLLAMA_MODEL = 'llama3:latest';
-const STORAGE_KEY = 'jarvis_calendar_v5_state';
+const STORAGE_KEY = 'jarvis_calendar_v6_state';
 
-const WEEKDAYS_SHORT = ['Pon', 'Wt', 'Ĺšr', 'Czw', 'Pt', 'Sob', 'Ndz'];
+const WEEKDAYS_SHORT = ['Pon', 'Wt', 'Śr', 'Czw', 'Pt', 'Sob', 'Ndz'];
 const MONTHS_PL = [
-  'StyczeĹ„',
+  'Styczeń',
   'Luty',
   'Marzec',
-  'KwiecieĹ„',
+  'Kwiecień',
   'Maj',
   'Czerwiec',
   'Lipiec',
-  'SierpieĹ„',
-  'WrzesieĹ„',
-  'PaĹşdziernik',
+  'Sierpień',
+  'Wrzesień',
+  'Październik',
   'Listopad',
-  'GrudzieĹ„',
+  'Grudzień',
 ];
 
 function pad2(value: number) {
@@ -159,9 +161,9 @@ function isShoppingEventTitle(title: string) {
   const normalized = title.toLowerCase();
   return (
     normalized.includes('zakupy') ||
-    normalized.includes('zrĂłb zakupy') ||
+    normalized.includes('zrób zakupy') ||
     normalized.includes('zrob zakupy') ||
-    normalized.includes('muszÄ™ zrobiÄ‡ zakupy') ||
+    normalized.includes('muszę zrobić zakupy') ||
     normalized.includes('musze zrobic zakupy') ||
     normalized.includes('biedron') ||
     normalized.includes('lidl') ||
@@ -174,12 +176,12 @@ function extractShoppingItemFromChat(text: string) {
   const lower = normalized.toLowerCase();
 
   const triggers = [
-    'muszÄ™ kupiÄ‡ ',
+    'muszę kupić ',
     'musze kupic ',
     'kup ',
-    'dodaj do zakupĂłw ',
+    'dodaj do zakupów ',
     'dodaj do zakupow ',
-    'potrzebujÄ™ ',
+    'potrzebuję ',
     'potrzebuje ',
   ];
 
@@ -521,10 +523,10 @@ function HomeScreen({ setActiveTab }: { setActiveTab: (tab: TabId) => void }) {
 
 function PlanScreen() {
   const items = [
-    ['09:00', 'SprawdziÄ‡ plan dnia', 'Dzisiaj', 'bg-blue-500'],
-    ['11:00', 'UmĂłwione spotkanie z zespoĹ‚em', 'Spotkanie', 'bg-violet-500'],
-    ['15:30', 'PrzeglÄ…d zadaĹ„ tygodniowych', 'Zadanie', 'bg-orange-400'],
-    ['18:00', 'SiĹ‚ownia', 'Prywatne', 'bg-emerald-500'],
+    ['09:00', 'Sprawdzić plan dnia', 'Dzisiaj', 'bg-blue-500'],
+    ['11:00', 'Umówione spotkanie z zespołem', 'Spotkanie', 'bg-violet-500'],
+    ['15:30', 'Przegląd zadań tygodniowych', 'Zadanie', 'bg-orange-400'],
+    ['18:00', 'Siłownia', 'Prywatne', 'bg-emerald-500'],
     ['19:00', 'Zakupy', 'Dom', 'bg-amber-400'],
   ] as const;
 
@@ -539,7 +541,7 @@ function PlanScreen() {
         <div className="mb-4 rounded-[22px] bg-[linear-gradient(180deg,#edf1f9_0%,#ebedf5_100%)] p-5">
           <div className="text-[18px] font-semibold text-slate-800">Dzisiejszy plan</div>
           <div className="mt-2 text-[15px] leading-6 text-slate-600">
-            Wszystkie najwaĹĽniejsze rzeczy zebrane w jednym miejscu.
+            Wszystkie najważniejsze rzeczy zebrane w jednym miejscu.
           </div>
         </div>
 
@@ -607,7 +609,7 @@ function ChatScreen({
         {
           id: `local-${Date.now()}`,
           role: 'assistant',
-          text: `DodaĹ‚em do luĹşnej listy zakupĂłw: ${extractedShoppingItem}. MoĹĽesz pĂłĹşniej podpiÄ…Ä‡ to do wydarzenia zakupowego w kalendarzu.`,
+          text: `Dodałem do listy zakupów: ${extractedShoppingItem}. Możesz później podpiąć to do wydarzenia zakupowego w kalendarzu.`,
         },
       ]);
       inputRef.current?.focus();
@@ -633,13 +635,14 @@ function ChatScreen({
       });
 
       if (!response.ok) {
-        throw new Error(`HTTP ${response.status}`);
+        const errorText = await response.text();
+        throw new Error(errorText || `HTTP ${response.status}`);
       }
 
       const data = await response.json();
       const assistantText =
         data?.message?.content?.trim() ||
-        'Nie udaĹ‚o siÄ™ pobraÄ‡ odpowiedzi z Ollamy.';
+        'Nie udało się pobrać odpowiedzi z Ollamy.';
 
       setChatMessages((prev) => [
         ...prev,
@@ -649,13 +652,24 @@ function ChatScreen({
           text: assistantText,
         },
       ]);
-    } catch {
+    } catch (error) {
+      const message =
+        error instanceof Error ? error.message.toLowerCase() : '';
+
+      let userError = `Nie mogę połączyć się z Ollamą. Upewnij się, że Ollama działa lokalnie i masz model ${OLLAMA_MODEL}.`;
+
+      if (message.includes('not found') || message.includes('model')) {
+        userError = `Ollama działa, ale model ${OLLAMA_MODEL} nie jest dostępny albo odpowiedź API jest błędna.`;
+      } else if (message.includes('failed to fetch') || message.includes('network')) {
+        userError = 'Nie udało się połączyć z lokalną Ollamą pod adresem http://127.0.0.1:11434.';
+      }
+
       setChatMessages((prev) => [
         ...prev,
         {
           id: `e-${Date.now()}`,
           role: 'assistant',
-          text: 'Nie mogÄ™ poĹ‚Ä…czyÄ‡ siÄ™ z OllamÄ…. Upewnij siÄ™, ĹĽe Ollama dziaĹ‚a lokalnie i masz model ' + OLLAMA_MODEL + '.',
+          text: userError,
         },
       ]);
     } finally {
@@ -684,7 +698,7 @@ function ChatScreen({
           <div className="min-h-0 flex-1 overflow-y-auto rounded-[30px] bg-transparent">
             {chatMessages.length === 0 ? (
               <div className="flex h-full items-center justify-center px-8 text-center text-[16px] text-slate-400">
-                Napisz pierwszÄ… wiadomoĹ›Ä‡ do Jarvisa.
+                Napisz pierwszą wiadomość do Jarvisa.
               </div>
             ) : (
               <div className="space-y-4 pb-4">
@@ -888,13 +902,32 @@ function CalendarScreen({
     );
   }
 
+  function removeChecklistItem(eventId: string, itemId: string) {
+    setEvents((prev) =>
+      prev.map((event) =>
+        event.id !== eventId
+          ? event
+          : {
+              ...event,
+              checklist: (event.checklist || []).filter((item) => item.id !== itemId),
+            }
+      )
+    );
+  }
+
   function addShoppingPoolItem() {
     const trimmed = newShoppingPoolItem.trim();
     if (!trimmed) return;
-    setShoppingPool((prev) => [
-      ...prev,
-      { id: `pool-${Date.now()}`, label: trimmed, done: false, linkedEventIds: [] },
-    ]);
+
+    setShoppingPool((prev) => {
+      const exists = prev.some((item) => item.label.toLowerCase() === trimmed.toLowerCase());
+      if (exists) return prev;
+      return [
+        ...prev,
+        { id: `pool-${Date.now()}`, label: trimmed, done: false, linkedEventIds: [] },
+      ];
+    });
+
     setNewShoppingPoolItem('');
   }
 
@@ -926,9 +959,43 @@ function CalendarScreen({
     );
   }
 
+  function detachShoppingItemFromEvent(eventId: string, itemId: string) {
+    setEvents((prev) =>
+      prev.map((event) =>
+        event.id !== eventId
+          ? event
+          : {
+              ...event,
+              linkedShoppingItemIds: (event.linkedShoppingItemIds || []).filter((id) => id !== itemId),
+            }
+      )
+    );
+
+    setShoppingPool((prev) =>
+      prev.map((item) =>
+        item.id !== itemId
+          ? item
+          : {
+              ...item,
+              linkedEventIds: item.linkedEventIds.filter((id) => id !== eventId),
+            }
+      )
+    );
+  }
+
   function toggleShoppingItemDone(itemId: string) {
     setShoppingPool((prev) =>
       prev.map((item) => (item.id === itemId ? { ...item, done: !item.done } : item))
+    );
+  }
+
+  function removeShoppingItemGlobally(itemId: string) {
+    setShoppingPool((prev) => prev.filter((item) => item.id !== itemId));
+    setEvents((prev) =>
+      prev.map((event) => ({
+        ...event,
+        linkedShoppingItemIds: (event.linkedShoppingItemIds || []).filter((id) => id !== itemId),
+      }))
     );
   }
 
@@ -1053,7 +1120,7 @@ function CalendarScreen({
       <div className="-mx-5 min-h-0 flex-1 overflow-y-auto bg-white/20 px-5 pb-2">
         {selectedEvents.length === 0 ? (
           <div className="rounded-[24px] bg-white/70 px-5 py-6 text-[16px] text-slate-500 shadow-sm">
-            Brak wydarzeĹ„ na ten dzieĹ„.
+            Brak wydarzeń na ten dzień.
           </div>
         ) : (
           <div className="space-y-0">
@@ -1126,21 +1193,34 @@ function CalendarScreen({
                             <div className="space-y-2">
                               {event.checklist && event.checklist.length > 0 ? (
                                 event.checklist.map((item) => (
-                                  <button
+                                  <div
                                     key={item.id}
-                                    type="button"
-                                    onClick={() => toggleChecklistItem(event.id, item.id)}
-                                    className="flex items-center gap-3 text-[15px] text-slate-700"
+                                    className="flex items-center justify-between gap-3 rounded-2xl bg-slate-50 px-3 py-2"
                                   >
-                                    {item.done ? (
-                                      <Check className="h-4 w-4 text-indigo-500" />
-                                    ) : (
-                                      <Square className="h-4 w-4 text-slate-400" />
-                                    )}
-                                    <span className={item.done ? 'line-through text-slate-400' : ''}>
-                                      {item.label}
-                                    </span>
-                                  </button>
+                                    <button
+                                      type="button"
+                                      onClick={() => toggleChecklistItem(event.id, item.id)}
+                                      className="flex min-w-0 items-center gap-3 text-left text-[15px] text-slate-700"
+                                    >
+                                      {item.done ? (
+                                        <Check className="h-4 w-4 shrink-0 text-indigo-500" />
+                                      ) : (
+                                        <Square className="h-4 w-4 shrink-0 text-slate-400" />
+                                      )}
+                                      <span className={item.done ? 'line-through text-slate-400' : ''}>
+                                        {item.label}
+                                      </span>
+                                    </button>
+
+                                    <button
+                                      type="button"
+                                      onClick={() => removeChecklistItem(event.id, item.id)}
+                                      className="rounded-full bg-rose-50 p-2 text-rose-500"
+                                      title="Usuń z checklisty"
+                                    >
+                                      <Trash2 className="h-4 w-4" />
+                                    </button>
+                                  </div>
                                 ))
                               ) : (
                                 <div className="text-[15px] text-slate-500">Brak checklisty.</div>
@@ -1150,36 +1230,62 @@ function CalendarScreen({
                         ) : (
                           <div>
                             <div className="mb-2 text-[13px] font-semibold uppercase tracking-wide text-slate-400">
-                              Lista zakupĂłw dla tego wydarzenia
+                              Lista zakupów dla tego wydarzenia
                             </div>
 
                             <div className="space-y-2">
                               {linkedPoolItems.length > 0 ? (
                                 linkedPoolItems.map((item) => (
-                                  <button
+                                  <div
                                     key={item.id}
-                                    type="button"
-                                    onClick={() => toggleShoppingItemDone(item.id)}
-                                    className="flex items-center gap-3 text-[15px] text-slate-700"
+                                    className="rounded-2xl bg-slate-50 px-3 py-2"
                                   >
-                                    {item.done ? (
-                                      <Check className="h-4 w-4 text-indigo-500" />
-                                    ) : (
-                                      <Square className="h-4 w-4 text-slate-400" />
-                                    )}
-                                    <span className={item.done ? 'line-through text-slate-400' : ''}>
-                                      {item.label}
-                                    </span>
-                                  </button>
+                                    <div className="flex items-center justify-between gap-3">
+                                      <button
+                                        type="button"
+                                        onClick={() => toggleShoppingItemDone(item.id)}
+                                        className="flex min-w-0 items-center gap-3 text-left text-[15px] text-slate-700"
+                                      >
+                                        {item.done ? (
+                                          <Check className="h-4 w-4 shrink-0 text-indigo-500" />
+                                        ) : (
+                                          <Square className="h-4 w-4 shrink-0 text-slate-400" />
+                                        )}
+                                        <span className={item.done ? 'line-through text-slate-400' : ''}>
+                                          {item.label}
+                                        </span>
+                                      </button>
+
+                                      <div className="flex items-center gap-2">
+                                        <button
+                                          type="button"
+                                          onClick={() => detachShoppingItemFromEvent(event.id, item.id)}
+                                          className="rounded-full bg-amber-50 p-2 text-amber-600"
+                                          title="Odepnij od wydarzenia"
+                                        >
+                                          <Unlink className="h-4 w-4" />
+                                        </button>
+
+                                        <button
+                                          type="button"
+                                          onClick={() => removeShoppingItemGlobally(item.id)}
+                                          className="rounded-full bg-rose-50 p-2 text-rose-500"
+                                          title="Usuń z listy zakupów"
+                                        >
+                                          <Trash2 className="h-4 w-4" />
+                                        </button>
+                                      </div>
+                                    </div>
+                                  </div>
                                 ))
                               ) : (
-                                <div className="text-[15px] text-slate-500">Brak przypiÄ™tych produktĂłw.</div>
+                                <div className="text-[15px] text-slate-500">Brak przypiętych produktów.</div>
                               )}
                             </div>
 
                             <div className="mt-4">
                               <div className="mb-2 text-[13px] font-semibold uppercase tracking-wide text-slate-400">
-                                Sugerowane z luĹşnej listy zakupĂłw
+                                Sugerowane z listy zakupów
                               </div>
 
                               <div className="space-y-2">
@@ -1187,13 +1293,23 @@ function CalendarScreen({
                                   suggestedPoolItems.map((item) => (
                                     <div key={item.id} className="flex items-center justify-between gap-3 rounded-2xl bg-slate-50 px-3 py-2">
                                       <span className="text-[14px] text-slate-700">{item.label}</span>
-                                      <button
-                                        type="button"
-                                        onClick={() => attachShoppingItemToEvent(event.id, item.id)}
-                                        className="rounded-full bg-indigo-100 px-3 py-1 text-[13px] font-medium text-indigo-600"
-                                      >
-                                        Dodaj
-                                      </button>
+                                      <div className="flex items-center gap-2">
+                                        <button
+                                          type="button"
+                                          onClick={() => attachShoppingItemToEvent(event.id, item.id)}
+                                          className="rounded-full bg-indigo-100 px-3 py-1 text-[13px] font-medium text-indigo-600"
+                                        >
+                                          Dodaj
+                                        </button>
+                                        <button
+                                          type="button"
+                                          onClick={() => removeShoppingItemGlobally(item.id)}
+                                          className="rounded-full bg-rose-50 p-2 text-rose-500"
+                                          title="Usuń z listy zakupów"
+                                        >
+                                          <Trash2 className="h-4 w-4" />
+                                        </button>
+                                      </div>
                                     </div>
                                   ))
                                 ) : (
@@ -1204,14 +1320,14 @@ function CalendarScreen({
 
                             <div className="mt-4">
                               <div className="mb-2 text-[13px] font-semibold uppercase tracking-wide text-slate-400">
-                                Dodaj luĹşno do projektu
+                                Dodaj do listy zakupów
                               </div>
                               <div className="flex items-center gap-2">
                                 <input
                                   value={newShoppingPoolItem}
                                   onChange={(e) => setNewShoppingPoolItem(e.target.value)}
                                   className="flex-1 rounded-2xl border border-slate-200 px-4 py-2.5 text-[14px] outline-none"
-                                  placeholder="Np. PĹ‚yn do naczyĹ„"
+                                  placeholder="Np. Płyn do naczyń"
                                 />
                                 <button
                                   type="button"
@@ -1238,7 +1354,7 @@ function CalendarScreen({
         <div className="absolute inset-0 z-30 flex items-center justify-center bg-slate-900/20 px-4">
           <div className="w-full max-w-[360px] rounded-[28px] bg-white p-5 shadow-[0_20px_60px_rgba(15,23,42,0.18)]">
             <div className="mb-4 flex items-center justify-between">
-              <div className="text-[20px] font-semibold text-slate-800">Wybierz miesiÄ…c</div>
+              <div className="text-[20px] font-semibold text-slate-800">Wybierz miesiąc</div>
               <button type="button" onClick={() => setShowMonthPicker(false)}>
                 <X className="h-5 w-5 text-slate-400" />
               </button>
@@ -1303,7 +1419,7 @@ function CalendarScreen({
 
             <div className="space-y-3">
               <label className="block">
-                <div className="mb-1 text-[13px] font-medium text-slate-500">TytuĹ‚</div>
+                <div className="mb-1 text-[13px] font-medium text-slate-500">Tytuł</div>
                 <input
                   value={newEventTitle}
                   onChange={(e) => setNewEventTitle(e.target.value)}
@@ -1340,7 +1456,7 @@ function CalendarScreen({
                   value={newEventNote}
                   onChange={(e) => setNewEventNote(e.target.value)}
                   className="min-h-[90px] w-full rounded-2xl border border-slate-200 px-4 py-3 text-[15px] outline-none"
-                  placeholder="KrĂłtka notatka do wydarzenia"
+                  placeholder="Krótka notatka do wydarzenia"
                 />
               </label>
 
@@ -1351,12 +1467,12 @@ function CalendarScreen({
                     value={newEventChecklist}
                     onChange={(e) => setNewEventChecklist(e.target.value)}
                     className="min-h-[90px] w-full rounded-2xl border border-slate-200 px-4 py-3 text-[15px] outline-none"
-                    placeholder="Jedna pozycja w linii&#10;Np. KupiÄ‡ bilet&#10;SprawdziÄ‡ agendÄ™"
+                    placeholder="Jedna pozycja w linii&#10;Np. Kupić bilet&#10;Sprawdzić agendę"
                   />
                 </label>
               ) : (
                 <div className="rounded-2xl bg-rose-50 px-4 py-3 text-[14px] text-rose-700">
-                  Dla wydarzeĹ„ zakupowych nie pokazujemy checklisty. Zamiast tego po utworzeniu pojawi siÄ™ lista zakupĂłw z sugestiami z ProjektĂłw/luĹşnej puli.
+                  Dla wydarzeń zakupowych nie pokazujemy checklisty. Zamiast tego po utworzeniu pojawi się lista zakupów z sugestiami ze wspólnej listy.
                 </div>
               )}
             </div>
@@ -1392,31 +1508,31 @@ function ProjectsScreen({
   const groups = useMemo(
     () => [
       {
-        title: 'OgĂłlne',
+        title: 'Ogólne',
         count: '5',
         icon: <Box className="h-7 w-7 text-indigo-400" />,
         items: [
-          'UmĂłwiÄ‡ spotkanie z zespoĹ‚em',
-          'Jak poprawiÄ‡ stronÄ™ gĹ‚ĂłwnÄ…?',
-          'PrzestaÄ‡ raport kwartalny',
-          'KupiÄ‡ prezent na urodziny Ani',
-          'ZnaleĹşÄ‡ dobrÄ… aplikacjÄ™ do CRM',
+          'Umówić spotkanie z zespołem',
+          'Jak poprawić stronę główną?',
+          'Przestać raport kwartalny',
+          'Kupić prezent na urodziny Ani',
+          'Znaleźć dobrą aplikację do CRM',
         ],
       },
       {
-        title: 'Lista zakupĂłw',
+        title: 'Lista zakupów',
         count: String(shoppingPool.length),
         icon: <ShoppingCart className="h-7 w-7 text-indigo-400" />,
         items: shoppingPool.map((item) => item.label),
       },
       {
-        title: 'PomysĹ‚y',
+        title: 'Pomysły',
         count: '6',
         icon: <Lightbulb className="h-7 w-7 text-indigo-400" />,
-        items: ['PomysĹ‚y na opis nowego projektu', 'Nowy artykuĹ‚ na bloga o produktywnoĹ›ci'],
+        items: ['Pomysły na opis nowego projektu', 'Nowy artykuł na bloga o produktywności'],
       },
       {
-        title: 'PrzeczytaÄ‡',
+        title: 'Przeczytać',
         count: '4',
         icon: <BookOpen className="h-7 w-7 text-indigo-400" />,
         items: [],
@@ -1536,12 +1652,12 @@ function SettingsScreen() {
               <div className="flex items-start justify-between gap-4">
                 <div className="flex gap-4">
                   <div className="flex h-20 w-20 items-center justify-center rounded-[18px] bg-indigo-100 text-[34px]">
-                    đź¦™
+                    🦙
                   </div>
                   <div>
                     <div className="text-[18px] font-semibold text-slate-800">Ollama</div>
                     <div className="mt-2 max-w-[250px] text-[16px] leading-7 text-slate-500">
-                      SprawdĹş status Ollamy i skonfiguruj Ĺ›rodowisko sztucznej inteligencji
+                      Aktywny model: {OLLAMA_MODEL}
                     </div>
                   </div>
                 </div>
@@ -1556,9 +1672,9 @@ function SettingsScreen() {
             <div className="rounded-[22px] bg-white/75 p-3 shadow-sm">
               <ToggleRow icon={<Bell className="h-7 w-7 text-indigo-300" />} title="Powiadomienia" />
               <div className="border-b border-slate-200" />
-              <ToggleRow icon={<Mic className="h-7 w-7 text-indigo-300" />} title="DostÄ™p do mikrofonu" />
+              <ToggleRow icon={<Mic className="h-7 w-7 text-indigo-300" />} title="Dostęp do mikrofonu" />
               <div className="border-b border-slate-200" />
-              <ToggleRow icon={<MapPin className="h-7 w-7 text-indigo-300" />} title="DostÄ™p do lokalizacji" />
+              <ToggleRow icon={<MapPin className="h-7 w-7 text-indigo-300" />} title="Dostęp do lokalizacji" />
             </div>
           </div>
 
@@ -1583,9 +1699,9 @@ export default function App() {
       badge: '45 min',
       dotClass: 'bg-violet-500',
       badgeClass: 'bg-violet-500/10 text-violet-600',
-      note: 'ZabraÄ‡ matÄ™ i butelkÄ™ wody.',
+      note: 'Zabrać matę i butelkę wody.',
       checklist: [
-        { id: '1-1', label: 'StrĂłj sportowy', done: true },
+        { id: '1-1', label: 'Strój sportowy', done: true },
         { id: '1-2', label: 'Mata', done: false },
       ],
       linkedShoppingItemIds: [],
@@ -1594,12 +1710,12 @@ export default function App() {
       id: '2',
       date: toDateKey(addDays(initialWeekStart, 1)),
       time: '10:30',
-      title: 'Spotkanie z zespoĹ‚em',
+      title: 'Spotkanie z zespołem',
       location: 'Biuro + Online (4 osoby)',
-      badge: 'ZespĂłĹ‚',
+      badge: 'Zespół',
       dotClass: 'bg-blue-500',
       badgeClass: 'bg-blue-500/10 text-blue-600',
-      note: 'OmĂłwiÄ‡ plan sprintu i priorytety tygodnia.',
+      note: 'Omówić plan sprintu i priorytety tygodnia.',
       checklist: [
         { id: '2-1', label: 'Agenda spotkania', done: true },
         { id: '2-2', label: 'Podsumowanie sprintu', done: false },
@@ -1610,8 +1726,8 @@ export default function App() {
       id: '3',
       date: toDateKey(addDays(initialWeekStart, 2)),
       time: '12:00',
-      title: 'Lunch z AnnÄ…',
-      location: 'Restauracja â€žZdrowa Kuchniaâ€ť',
+      title: 'Lunch z Anną',
+      location: 'Restauracja „Zdrowa Kuchnia”',
       badge: '90 min',
       dotClass: 'bg-emerald-500',
       badgeClass: 'bg-emerald-500/10 text-emerald-600',
@@ -1623,12 +1739,12 @@ export default function App() {
       id: '4',
       date: toDateKey(addDays(initialWeekStart, 3)),
       time: '14:00',
-      title: 'PrzeglÄ…d projektu',
-      location: 'PrzygotowaÄ‡ prezentacjÄ™',
+      title: 'Przegląd projektu',
+      location: 'Przygotować prezentację',
       badge: 'Praca',
       dotClass: 'bg-orange-500',
       badgeClass: 'bg-orange-500/10 text-orange-600',
-      note: 'SprawdziÄ‡ status backendu i frontendowego kalendarza.',
+      note: 'Sprawdzić status backendu i frontendowego kalendarza.',
       checklist: [
         { id: '4-1', label: 'Slajdy', done: false },
         { id: '4-2', label: 'Demo', done: false },
@@ -1644,26 +1760,26 @@ export default function App() {
       badge: 'Zakupy',
       dotClass: 'bg-rose-500',
       badgeClass: 'bg-rose-500/10 text-rose-600',
-      note: 'SprawdĹş, co juĹĽ jest w domu.',
+      note: 'Sprawdź, co już jest w domu.',
       linkedShoppingItemIds: ['pool-1', 'pool-2'],
     },
     {
       id: '6',
       date: toDateKey(addDays(initialWeekStart, 5)),
       time: '18:00',
-      title: 'Trening siĹ‚owy',
-      location: 'SiĹ‚ownia Power Gym',
+      title: 'Trening siłowy',
+      location: 'Siłownia Power Gym',
       badge: '75 min',
       dotClass: 'bg-slate-500',
       badgeClass: 'bg-slate-500/10 text-slate-600',
-      note: 'DzieĹ„ nĂłg + rozciÄ…ganie.',
+      note: 'Dzień nóg + rozciąganie.',
       checklist: [{ id: '6-1', label: 'Karnet', done: true }],
       linkedShoppingItemIds: [],
     },
   ];
 
   const defaultShoppingPool: ShoppingPoolItem[] = [
-    { id: 'pool-1', label: 'Pasta do zÄ™bĂłw', done: false, linkedEventIds: ['5'] },
+    { id: 'pool-1', label: 'Pasta do zębów', done: false, linkedEventIds: ['5'] },
     { id: 'pool-2', label: 'Szampon', done: false, linkedEventIds: ['5'] },
     { id: 'pool-3', label: 'Mleko', done: false, linkedEventIds: [] },
     { id: 'pool-4', label: 'Makaron', done: false, linkedEventIds: [] },
@@ -1777,4 +1893,3 @@ export default function App() {
     </PhoneShell>
   );
 }
-
