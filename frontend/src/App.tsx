@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+﻿import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   Bell,
   Home,
@@ -9,7 +9,6 @@ import {
   CheckSquare,
   ChevronRight,
   Plus,
-  Inbox,
   Search,
   ChevronDown,
   ChevronLeft,
@@ -74,22 +73,22 @@ const copy = {
   version: 'Wersja 9.7.5',
   beta: 'BETA',
   welcome: 'Witaj Mateusz!',
-  wave: '👋',
-  todayLine1: 'Masz dziś ',
-  tasks10: '10 zadań',
+  wave: 'đź‘‹',
+  todayLine1: 'Masz dziĹ› ',
+  tasks10: '10 zadaĹ„',
   todayLine2: ' i ',
   meeting1: '1 spotkanie',
   todayLine3: ' o ',
   todayLine4: '11:00',
   cardToday: 'Dzisiaj',
   cardTodo: 'Do zrobienia',
-  cardWeek: 'Ten tydzień',
+  cardWeek: 'Ten tydzieĹ„',
   cardProjects: 'Projekty',
-  tasksLabel: 'zadań',
-  upcoming: 'Nadchodzące',
+  tasksLabel: 'zadaĹ„',
+  upcoming: 'NadchodzÄ…ce',
   seeAll: 'Zobacz wszystko',
-  event1: 'Umówione spotkanie z zespołem',
-  event2: 'Przegląd zadań tygodniowych',
+  event1: 'UmĂłwione spotkanie z zespoĹ‚em',
+  event2: 'PrzeglÄ…d zadaĹ„ tygodniowych',
   meetingTag: 'Spotkanie',
   taskTag: 'Zadanie',
   navHome: 'Home',
@@ -99,22 +98,23 @@ const copy = {
   navSettings: 'Ustawienia',
 };
 
-const OLLAMA_MODEL = 'llama3.2';
+const OLLAMA_MODEL = 'llama3:latest';
+const STORAGE_KEY = 'jarvis_calendar_v5_state';
 
-const WEEKDAYS_SHORT = ['Pon', 'Wt', 'Śr', 'Czw', 'Pt', 'Sob', 'Ndz'];
+const WEEKDAYS_SHORT = ['Pon', 'Wt', 'Ĺšr', 'Czw', 'Pt', 'Sob', 'Ndz'];
 const MONTHS_PL = [
-  'Styczeń',
+  'StyczeĹ„',
   'Luty',
   'Marzec',
-  'Kwiecień',
+  'KwiecieĹ„',
   'Maj',
   'Czerwiec',
   'Lipiec',
-  'Sierpień',
-  'Wrzesień',
-  'Październik',
+  'SierpieĹ„',
+  'WrzesieĹ„',
+  'PaĹşdziernik',
   'Listopad',
-  'Grudzień',
+  'GrudzieĹ„',
 ];
 
 function pad2(value: number) {
@@ -159,14 +159,41 @@ function isShoppingEventTitle(title: string) {
   const normalized = title.toLowerCase();
   return (
     normalized.includes('zakupy') ||
-    normalized.includes('zrób zakupy') ||
+    normalized.includes('zrĂłb zakupy') ||
     normalized.includes('zrob zakupy') ||
-    normalized.includes('muszę zrobić zakupy') ||
+    normalized.includes('muszÄ™ zrobiÄ‡ zakupy') ||
     normalized.includes('musze zrobic zakupy') ||
     normalized.includes('biedron') ||
     normalized.includes('lidl') ||
     normalized.includes('sklep')
   );
+}
+
+function extractShoppingItemFromChat(text: string) {
+  const normalized = text.trim();
+  const lower = normalized.toLowerCase();
+
+  const triggers = [
+    'muszÄ™ kupiÄ‡ ',
+    'musze kupic ',
+    'kup ',
+    'dodaj do zakupĂłw ',
+    'dodaj do zakupow ',
+    'potrzebujÄ™ ',
+    'potrzebuje ',
+  ];
+
+  for (const trigger of triggers) {
+    const index = lower.indexOf(trigger);
+    if (index >= 0) {
+      const extracted = normalized.slice(index + trigger.length).trim();
+      if (extracted.length > 1) {
+        return extracted.charAt(0).toUpperCase() + extracted.slice(1);
+      }
+    }
+  }
+
+  return null;
 }
 
 function Header({
@@ -367,7 +394,6 @@ function HomeScreen({ setActiveTab }: { setActiveTab: (tab: TabId) => void }) {
   return (
     <div className="flex h-full flex-col">
       <Header title="Home" subtitle={copy.version} beta />
-
       <section className="-mx-5 mb-3 bg-[linear-gradient(180deg,#edf1f9_0%,#ebedf5_100%)] px-5 py-0">
         <div className="flex h-[122px] items-center gap-3">
           <div className="flex w-[170px] shrink-0 items-center justify-center">
@@ -421,7 +447,7 @@ function HomeScreen({ setActiveTab }: { setActiveTab: (tab: TabId) => void }) {
           onClick={() => setActiveTab('calendar')}
         />
         <DashboardCard
-          icon={<Inbox className="h-5 w-5 text-violet-400" />}
+          icon={<ShoppingCart className="h-5 w-5 text-violet-400" />}
           title={copy.cardProjects}
           value="15"
           subtitle={copy.tasksLabel}
@@ -495,10 +521,10 @@ function HomeScreen({ setActiveTab }: { setActiveTab: (tab: TabId) => void }) {
 
 function PlanScreen() {
   const items = [
-    ['09:00', 'Sprawdzić plan dnia', 'Dzisiaj', 'bg-blue-500'],
-    ['11:00', 'Umówione spotkanie z zespołem', 'Spotkanie', 'bg-violet-500'],
-    ['15:30', 'Przegląd zadań tygodniowych', 'Zadanie', 'bg-orange-400'],
-    ['18:00', 'Siłownia', 'Prywatne', 'bg-emerald-500'],
+    ['09:00', 'SprawdziÄ‡ plan dnia', 'Dzisiaj', 'bg-blue-500'],
+    ['11:00', 'UmĂłwione spotkanie z zespoĹ‚em', 'Spotkanie', 'bg-violet-500'],
+    ['15:30', 'PrzeglÄ…d zadaĹ„ tygodniowych', 'Zadanie', 'bg-orange-400'],
+    ['18:00', 'SiĹ‚ownia', 'Prywatne', 'bg-emerald-500'],
     ['19:00', 'Zakupy', 'Dom', 'bg-amber-400'],
   ] as const;
 
@@ -509,12 +535,11 @@ function PlanScreen() {
         subtitle={copy.version}
         icon={<ClipboardList className="h-10 w-10 text-indigo-400" />}
       />
-
       <div className="min-h-0 flex-1 overflow-y-auto pr-1">
         <div className="mb-4 rounded-[22px] bg-[linear-gradient(180deg,#edf1f9_0%,#ebedf5_100%)] p-5">
           <div className="text-[18px] font-semibold text-slate-800">Dzisiejszy plan</div>
           <div className="mt-2 text-[15px] leading-6 text-slate-600">
-            Wszystkie najważniejsze rzeczy zebrane w jednym miejscu.
+            Wszystkie najwaĹĽniejsze rzeczy zebrane w jednym miejscu.
           </div>
         </div>
 
@@ -542,16 +567,23 @@ function PlanScreen() {
   );
 }
 
-function ChatScreen() {
+function ChatScreen({
+  onShoppingDetected,
+  chatMessages,
+  setChatMessages,
+}: {
+  onShoppingDetected: (itemLabel: string) => void;
+  chatMessages: ChatMessage[];
+  setChatMessages: React.Dispatch<React.SetStateAction<ChatMessage[]>>;
+}) {
   const inputRef = useRef<HTMLInputElement>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const [message, setMessage] = useState('');
   const [isSending, setIsSending] = useState(false);
-  const [messages, setMessages] = useState<ChatMessage[]>([]);
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [messages, isSending]);
+  }, [chatMessages, isSending]);
 
   async function sendMessage() {
     const trimmed = message.trim();
@@ -563,9 +595,25 @@ function ChatScreen() {
       text: trimmed,
     };
 
-    const nextMessages = [...messages, userMessage];
-    setMessages(nextMessages);
+    const nextMessages = [...chatMessages, userMessage];
+    setChatMessages(nextMessages);
     setMessage('');
+
+    const extractedShoppingItem = extractShoppingItemFromChat(trimmed);
+    if (extractedShoppingItem) {
+      onShoppingDetected(extractedShoppingItem);
+      setChatMessages((prev) => [
+        ...prev,
+        {
+          id: `local-${Date.now()}`,
+          role: 'assistant',
+          text: `DodaĹ‚em do luĹşnej listy zakupĂłw: ${extractedShoppingItem}. MoĹĽesz pĂłĹşniej podpiÄ…Ä‡ to do wydarzenia zakupowego w kalendarzu.`,
+        },
+      ]);
+      inputRef.current?.focus();
+      return;
+    }
+
     setIsSending(true);
 
     try {
@@ -591,9 +639,9 @@ function ChatScreen() {
       const data = await response.json();
       const assistantText =
         data?.message?.content?.trim() ||
-        'Nie udało się pobrać odpowiedzi z Ollamy.';
+        'Nie udaĹ‚o siÄ™ pobraÄ‡ odpowiedzi z Ollamy.';
 
-      setMessages((prev) => [
+      setChatMessages((prev) => [
         ...prev,
         {
           id: `a-${Date.now()}`,
@@ -601,13 +649,13 @@ function ChatScreen() {
           text: assistantText,
         },
       ]);
-    } catch (error) {
-      setMessages((prev) => [
+    } catch {
+      setChatMessages((prev) => [
         ...prev,
         {
           id: `e-${Date.now()}`,
           role: 'assistant',
-          text: 'Nie mogę połączyć się z Ollamą. Upewnij się, że Ollama działa lokalnie i masz model ' + OLLAMA_MODEL + '.',
+          text: 'Nie mogÄ™ poĹ‚Ä…czyÄ‡ siÄ™ z OllamÄ…. Upewnij siÄ™, ĹĽe Ollama dziaĹ‚a lokalnie i masz model ' + OLLAMA_MODEL + '.',
         },
       ]);
     } finally {
@@ -634,13 +682,13 @@ function ChatScreen() {
       <div className="-mx-5 min-h-0 flex-1 bg-[linear-gradient(180deg,#edf1f9_0%,#ebedf5_100%)] px-5 py-5">
         <div className="flex h-full flex-col">
           <div className="min-h-0 flex-1 overflow-y-auto rounded-[30px] bg-transparent">
-            {messages.length === 0 ? (
+            {chatMessages.length === 0 ? (
               <div className="flex h-full items-center justify-center px-8 text-center text-[16px] text-slate-400">
-                Napisz pierwszą wiadomość do Jarvisa.
+                Napisz pierwszÄ… wiadomoĹ›Ä‡ do Jarvisa.
               </div>
             ) : (
               <div className="space-y-4 pb-4">
-                {messages.map((msg) => (
+                {chatMessages.map((msg) => (
                   <div
                     key={msg.id}
                     className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}
@@ -705,112 +753,20 @@ function ChatScreen() {
   );
 }
 
-function CalendarScreen() {
+function CalendarScreen({
+  shoppingPool,
+  setShoppingPool,
+  events,
+  setEvents,
+}: {
+  shoppingPool: ShoppingPoolItem[];
+  setShoppingPool: React.Dispatch<React.SetStateAction<ShoppingPoolItem[]>>;
+  events: CalendarEvent[];
+  setEvents: React.Dispatch<React.SetStateAction<CalendarEvent[]>>;
+}) {
   const today = useMemo(() => new Date(), []);
   const initialWeekStart = useMemo(() => startOfWeek(today), [today]);
 
-  const initialEvents = useMemo<CalendarEvent[]>(
-    () => [
-      {
-        id: '1',
-        date: toDateKey(addDays(initialWeekStart, 0)),
-        time: '09:00',
-        title: 'Joga',
-        location: 'Fitness Club',
-        badge: '45 min',
-        dotClass: 'bg-violet-500',
-        badgeClass: 'bg-violet-500/10 text-violet-600',
-        note: 'Zabrać matę i butelkę wody.',
-        checklist: [
-          { id: '1-1', label: 'Strój sportowy', done: true },
-          { id: '1-2', label: 'Mata', done: false },
-        ],
-        linkedShoppingItemIds: [],
-      },
-      {
-        id: '2',
-        date: toDateKey(addDays(initialWeekStart, 1)),
-        time: '10:30',
-        title: 'Spotkanie z zespołem',
-        location: 'Biuro + Online (4 osoby)',
-        badge: 'Zespół',
-        dotClass: 'bg-blue-500',
-        badgeClass: 'bg-blue-500/10 text-blue-600',
-        note: 'Omówić plan sprintu i priorytety tygodnia.',
-        checklist: [
-          { id: '2-1', label: 'Agenda spotkania', done: true },
-          { id: '2-2', label: 'Podsumowanie sprintu', done: false },
-        ],
-        linkedShoppingItemIds: [],
-      },
-      {
-        id: '3',
-        date: toDateKey(addDays(initialWeekStart, 2)),
-        time: '12:00',
-        title: 'Lunch z Anną',
-        location: 'Restauracja „Zdrowa Kuchnia”',
-        badge: '90 min',
-        dotClass: 'bg-emerald-500',
-        badgeClass: 'bg-emerald-500/10 text-emerald-600',
-        note: 'Rezerwacja na nazwisko Wysocka.',
-        checklist: [],
-        linkedShoppingItemIds: [],
-      },
-      {
-        id: '4',
-        date: toDateKey(addDays(initialWeekStart, 3)),
-        time: '14:00',
-        title: 'Przegląd projektu',
-        location: 'Przygotować prezentację',
-        badge: 'Praca',
-        dotClass: 'bg-orange-500',
-        badgeClass: 'bg-orange-500/10 text-orange-600',
-        note: 'Sprawdzić status backendu i frontendowego kalendarza.',
-        checklist: [
-          { id: '4-1', label: 'Slajdy', done: false },
-          { id: '4-2', label: 'Demo', done: false },
-        ],
-        linkedShoppingItemIds: [],
-      },
-      {
-        id: '5',
-        date: toDateKey(addDays(initialWeekStart, 3)),
-        time: '16:30',
-        title: 'Zakupy w Biedronce',
-        location: 'Biedronka osiedlowa',
-        badge: 'Zakupy',
-        dotClass: 'bg-rose-500',
-        badgeClass: 'bg-rose-500/10 text-rose-600',
-        note: 'Sprawdź, co już jest w domu.',
-        checklist: [],
-        linkedShoppingItemIds: ['pool-1', 'pool-2'],
-      },
-      {
-        id: '6',
-        date: toDateKey(addDays(initialWeekStart, 5)),
-        time: '18:00',
-        title: 'Trening siłowy',
-        location: 'Siłownia Power Gym',
-        badge: '75 min',
-        dotClass: 'bg-slate-500',
-        badgeClass: 'bg-slate-500/10 text-slate-600',
-        note: 'Dzień nóg + rozciąganie.',
-        checklist: [{ id: '6-1', label: 'Karnet', done: true }],
-        linkedShoppingItemIds: [],
-      },
-    ],
-    [initialWeekStart]
-  );
-
-  const initialShoppingPool: ShoppingPoolItem[] = [
-    { id: 'pool-1', label: 'Pasta do zębów', done: false, linkedEventIds: ['5'] },
-    { id: 'pool-2', label: 'Szampon', done: false, linkedEventIds: ['5'] },
-    { id: 'pool-3', label: 'Mleko', done: false, linkedEventIds: [] },
-    { id: 'pool-4', label: 'Makaron', done: false, linkedEventIds: [] },
-  ];
-
-  const [events, setEvents] = useState<CalendarEvent[]>(initialEvents);
-  const [shoppingPool, setShoppingPool] = useState<ShoppingPoolItem[]>(initialShoppingPool);
   const [weekStart, setWeekStart] = useState(initialWeekStart);
   const [selectedDate, setSelectedDate] = useState(toDateKey(today));
   const [expandedEventId, setExpandedEventId] = useState<string | null>(null);
@@ -882,19 +838,21 @@ function CalendarScreen() {
     const trimmedTitle = newEventTitle.trim();
     if (!trimmedTitle) return;
 
+    const shoppingEvent = isShoppingEventTitle(trimmedTitle);
+
     const event: CalendarEvent = {
       id: `event-${Date.now()}`,
       title: trimmedTitle,
       date: effectiveSelectedDate,
       time: newEventTime || '10:00',
       location: newEventLocation.trim() || 'Brak miejsca',
-      badge: isShoppingEventTitle(trimmedTitle) ? 'Zakupy' : 'Nowe',
-      dotClass: isShoppingEventTitle(trimmedTitle) ? 'bg-rose-500' : 'bg-indigo-500',
-      badgeClass: isShoppingEventTitle(trimmedTitle)
+      badge: shoppingEvent ? 'Zakupy' : 'Nowe',
+      dotClass: shoppingEvent ? 'bg-rose-500' : 'bg-indigo-500',
+      badgeClass: shoppingEvent
         ? 'bg-rose-500/10 text-rose-600'
         : 'bg-indigo-500/10 text-indigo-600',
       note: newEventNote.trim(),
-      checklist: buildChecklistItems(newEventChecklist),
+      checklist: shoppingEvent ? [] : buildChecklistItems(newEventChecklist),
       linkedShoppingItemIds: [],
     };
 
@@ -1095,7 +1053,7 @@ function CalendarScreen() {
       <div className="-mx-5 min-h-0 flex-1 overflow-y-auto bg-white/20 px-5 pb-2">
         {selectedEvents.length === 0 ? (
           <div className="rounded-[24px] bg-white/70 px-5 py-6 text-[16px] text-slate-500 shadow-sm">
-            Brak wydarzeń na ten dzień.
+            Brak wydarzeĹ„ na ten dzieĹ„.
           </div>
         ) : (
           <div className="space-y-0">
@@ -1160,39 +1118,39 @@ function CalendarScreen() {
                           </div>
                         </div>
 
-                        <div>
-                          <div className="mb-2 text-[13px] font-semibold uppercase tracking-wide text-slate-400">
-                            Checklista
-                          </div>
-                          <div className="space-y-2">
-                            {event.checklist && event.checklist.length > 0 ? (
-                              event.checklist.map((item) => (
-                                <button
-                                  key={item.id}
-                                  type="button"
-                                  onClick={() => toggleChecklistItem(event.id, item.id)}
-                                  className="flex items-center gap-3 text-[15px] text-slate-700"
-                                >
-                                  {item.done ? (
-                                    <Check className="h-4 w-4 text-indigo-500" />
-                                  ) : (
-                                    <Square className="h-4 w-4 text-slate-400" />
-                                  )}
-                                  <span className={item.done ? 'line-through text-slate-400' : ''}>
-                                    {item.label}
-                                  </span>
-                                </button>
-                              ))
-                            ) : (
-                              <div className="text-[15px] text-slate-500">Brak checklisty.</div>
-                            )}
-                          </div>
-                        </div>
-
-                        {isShopping ? (
+                        {!isShopping ? (
                           <div>
                             <div className="mb-2 text-[13px] font-semibold uppercase tracking-wide text-slate-400">
-                              Lista zakupów dla tego wydarzenia
+                              Checklista
+                            </div>
+                            <div className="space-y-2">
+                              {event.checklist && event.checklist.length > 0 ? (
+                                event.checklist.map((item) => (
+                                  <button
+                                    key={item.id}
+                                    type="button"
+                                    onClick={() => toggleChecklistItem(event.id, item.id)}
+                                    className="flex items-center gap-3 text-[15px] text-slate-700"
+                                  >
+                                    {item.done ? (
+                                      <Check className="h-4 w-4 text-indigo-500" />
+                                    ) : (
+                                      <Square className="h-4 w-4 text-slate-400" />
+                                    )}
+                                    <span className={item.done ? 'line-through text-slate-400' : ''}>
+                                      {item.label}
+                                    </span>
+                                  </button>
+                                ))
+                              ) : (
+                                <div className="text-[15px] text-slate-500">Brak checklisty.</div>
+                              )}
+                            </div>
+                          </div>
+                        ) : (
+                          <div>
+                            <div className="mb-2 text-[13px] font-semibold uppercase tracking-wide text-slate-400">
+                              Lista zakupĂłw dla tego wydarzenia
                             </div>
 
                             <div className="space-y-2">
@@ -1215,13 +1173,13 @@ function CalendarScreen() {
                                   </button>
                                 ))
                               ) : (
-                                <div className="text-[15px] text-slate-500">Brak przypiętych produktów.</div>
+                                <div className="text-[15px] text-slate-500">Brak przypiÄ™tych produktĂłw.</div>
                               )}
                             </div>
 
                             <div className="mt-4">
                               <div className="mb-2 text-[13px] font-semibold uppercase tracking-wide text-slate-400">
-                                Sugerowane z luźnej listy zakupów
+                                Sugerowane z luĹşnej listy zakupĂłw
                               </div>
 
                               <div className="space-y-2">
@@ -1246,14 +1204,14 @@ function CalendarScreen() {
 
                             <div className="mt-4">
                               <div className="mb-2 text-[13px] font-semibold uppercase tracking-wide text-slate-400">
-                                Dodaj luźno do projektu
+                                Dodaj luĹşno do projektu
                               </div>
                               <div className="flex items-center gap-2">
                                 <input
                                   value={newShoppingPoolItem}
                                   onChange={(e) => setNewShoppingPoolItem(e.target.value)}
                                   className="flex-1 rounded-2xl border border-slate-200 px-4 py-2.5 text-[14px] outline-none"
-                                  placeholder="Np. Płyn do naczyń"
+                                  placeholder="Np. PĹ‚yn do naczyĹ„"
                                 />
                                 <button
                                   type="button"
@@ -1265,7 +1223,7 @@ function CalendarScreen() {
                               </div>
                             </div>
                           </div>
-                        ) : null}
+                        )}
                       </div>
                     </div>
                   ) : null}
@@ -1280,7 +1238,7 @@ function CalendarScreen() {
         <div className="absolute inset-0 z-30 flex items-center justify-center bg-slate-900/20 px-4">
           <div className="w-full max-w-[360px] rounded-[28px] bg-white p-5 shadow-[0_20px_60px_rgba(15,23,42,0.18)]">
             <div className="mb-4 flex items-center justify-between">
-              <div className="text-[20px] font-semibold text-slate-800">Wybierz miesiąc</div>
+              <div className="text-[20px] font-semibold text-slate-800">Wybierz miesiÄ…c</div>
               <button type="button" onClick={() => setShowMonthPicker(false)}>
                 <X className="h-5 w-5 text-slate-400" />
               </button>
@@ -1345,7 +1303,7 @@ function CalendarScreen() {
 
             <div className="space-y-3">
               <label className="block">
-                <div className="mb-1 text-[13px] font-medium text-slate-500">Tytuł</div>
+                <div className="mb-1 text-[13px] font-medium text-slate-500">TytuĹ‚</div>
                 <input
                   value={newEventTitle}
                   onChange={(e) => setNewEventTitle(e.target.value)}
@@ -1382,19 +1340,25 @@ function CalendarScreen() {
                   value={newEventNote}
                   onChange={(e) => setNewEventNote(e.target.value)}
                   className="min-h-[90px] w-full rounded-2xl border border-slate-200 px-4 py-3 text-[15px] outline-none"
-                  placeholder="Krótka notatka do wydarzenia"
+                  placeholder="KrĂłtka notatka do wydarzenia"
                 />
               </label>
 
-              <label className="block">
-                <div className="mb-1 text-[13px] font-medium text-slate-500">Checklista</div>
-                <textarea
-                  value={newEventChecklist}
-                  onChange={(e) => setNewEventChecklist(e.target.value)}
-                  className="min-h-[90px] w-full rounded-2xl border border-slate-200 px-4 py-3 text-[15px] outline-none"
-                  placeholder="Jedna pozycja w linii&#10;Np. Kupić bilet&#10;Sprawdzić agendę"
-                />
-              </label>
+              {!isShoppingEventTitle(newEventTitle) ? (
+                <label className="block">
+                  <div className="mb-1 text-[13px] font-medium text-slate-500">Checklista</div>
+                  <textarea
+                    value={newEventChecklist}
+                    onChange={(e) => setNewEventChecklist(e.target.value)}
+                    className="min-h-[90px] w-full rounded-2xl border border-slate-200 px-4 py-3 text-[15px] outline-none"
+                    placeholder="Jedna pozycja w linii&#10;Np. KupiÄ‡ bilet&#10;SprawdziÄ‡ agendÄ™"
+                  />
+                </label>
+              ) : (
+                <div className="rounded-2xl bg-rose-50 px-4 py-3 text-[14px] text-rose-700">
+                  Dla wydarzeĹ„ zakupowych nie pokazujemy checklisty. Zamiast tego po utworzeniu pojawi siÄ™ lista zakupĂłw z sugestiami z ProjektĂłw/luĹşnej puli.
+                </div>
+              )}
             </div>
 
             <div className="mt-5 flex items-center justify-end gap-3">
@@ -1420,41 +1384,45 @@ function CalendarScreen() {
   );
 }
 
-function ProjectsScreen() {
+function ProjectsScreen({
+  shoppingPool,
+}: {
+  shoppingPool: ShoppingPoolItem[];
+}) {
   const groups = useMemo(
     () => [
       {
-        title: 'Ogólne',
+        title: 'OgĂłlne',
         count: '5',
         icon: <Box className="h-7 w-7 text-indigo-400" />,
         items: [
-          'Umówić spotkanie z zespołem',
-          'Jak poprawić stronę główną?',
-          'Przestać raport kwartalny',
-          'Kupić prezent na urodziny Ani',
-          'Znaleźć dobrą aplikację do CRM',
+          'UmĂłwiÄ‡ spotkanie z zespoĹ‚em',
+          'Jak poprawiÄ‡ stronÄ™ gĹ‚ĂłwnÄ…?',
+          'PrzestaÄ‡ raport kwartalny',
+          'KupiÄ‡ prezent na urodziny Ani',
+          'ZnaleĹşÄ‡ dobrÄ… aplikacjÄ™ do CRM',
         ],
       },
       {
-        title: 'Lista zakupów',
-        count: '3',
+        title: 'Lista zakupĂłw',
+        count: String(shoppingPool.length),
         icon: <ShoppingCart className="h-7 w-7 text-indigo-400" />,
-        items: ['Mleko i pieczywo', 'Makaron i warzywa na obiad'],
+        items: shoppingPool.map((item) => item.label),
       },
       {
-        title: 'Pomysły',
+        title: 'PomysĹ‚y',
         count: '6',
         icon: <Lightbulb className="h-7 w-7 text-indigo-400" />,
-        items: ['Pomysły na opis nowego projektu', 'Nowy artykuł na bloga o produktywności'],
+        items: ['PomysĹ‚y na opis nowego projektu', 'Nowy artykuĹ‚ na bloga o produktywnoĹ›ci'],
       },
       {
-        title: 'Przeczytać',
+        title: 'PrzeczytaÄ‡',
         count: '4',
         icon: <BookOpen className="h-7 w-7 text-indigo-400" />,
         items: [],
       },
     ],
-    []
+    [shoppingPool]
   );
 
   return (
@@ -1501,7 +1469,7 @@ function ProjectsScreen() {
 
                     {groupIndex === 0 ? (
                       <div className="rounded-xl bg-indigo-50 px-3 py-1 text-[16px] font-medium text-indigo-400">
-                        {[5, 3, 6, 4, 2][itemIndex]}
+                        {[5, 3, 6, 4, 2][itemIndex] ?? 1}
                       </div>
                     ) : null}
                   </div>
@@ -1568,12 +1536,12 @@ function SettingsScreen() {
               <div className="flex items-start justify-between gap-4">
                 <div className="flex gap-4">
                   <div className="flex h-20 w-20 items-center justify-center rounded-[18px] bg-indigo-100 text-[34px]">
-                    🦙
+                    đź¦™
                   </div>
                   <div>
                     <div className="text-[18px] font-semibold text-slate-800">Ollama</div>
                     <div className="mt-2 max-w-[250px] text-[16px] leading-7 text-slate-500">
-                      Sprawdź status Ollamy i skonfiguruj środowisko sztucznej inteligencji
+                      SprawdĹş status Ollamy i skonfiguruj Ĺ›rodowisko sztucznej inteligencji
                     </div>
                   </div>
                 </div>
@@ -1588,9 +1556,9 @@ function SettingsScreen() {
             <div className="rounded-[22px] bg-white/75 p-3 shadow-sm">
               <ToggleRow icon={<Bell className="h-7 w-7 text-indigo-300" />} title="Powiadomienia" />
               <div className="border-b border-slate-200" />
-              <ToggleRow icon={<Mic className="h-7 w-7 text-indigo-300" />} title="Dostęp do mikrofonu" />
+              <ToggleRow icon={<Mic className="h-7 w-7 text-indigo-300" />} title="DostÄ™p do mikrofonu" />
               <div className="border-b border-slate-200" />
-              <ToggleRow icon={<MapPin className="h-7 w-7 text-indigo-300" />} title="Dostęp do lokalizacji" />
+              <ToggleRow icon={<MapPin className="h-7 w-7 text-indigo-300" />} title="DostÄ™p do lokalizacji" />
             </div>
           </div>
 
@@ -1602,22 +1570,197 @@ function SettingsScreen() {
 }
 
 export default function App() {
+  const today = new Date();
+  const initialWeekStart = startOfWeek(today);
+
+  const defaultEvents: CalendarEvent[] = [
+    {
+      id: '1',
+      date: toDateKey(addDays(initialWeekStart, 0)),
+      time: '09:00',
+      title: 'Joga',
+      location: 'Fitness Club',
+      badge: '45 min',
+      dotClass: 'bg-violet-500',
+      badgeClass: 'bg-violet-500/10 text-violet-600',
+      note: 'ZabraÄ‡ matÄ™ i butelkÄ™ wody.',
+      checklist: [
+        { id: '1-1', label: 'StrĂłj sportowy', done: true },
+        { id: '1-2', label: 'Mata', done: false },
+      ],
+      linkedShoppingItemIds: [],
+    },
+    {
+      id: '2',
+      date: toDateKey(addDays(initialWeekStart, 1)),
+      time: '10:30',
+      title: 'Spotkanie z zespoĹ‚em',
+      location: 'Biuro + Online (4 osoby)',
+      badge: 'ZespĂłĹ‚',
+      dotClass: 'bg-blue-500',
+      badgeClass: 'bg-blue-500/10 text-blue-600',
+      note: 'OmĂłwiÄ‡ plan sprintu i priorytety tygodnia.',
+      checklist: [
+        { id: '2-1', label: 'Agenda spotkania', done: true },
+        { id: '2-2', label: 'Podsumowanie sprintu', done: false },
+      ],
+      linkedShoppingItemIds: [],
+    },
+    {
+      id: '3',
+      date: toDateKey(addDays(initialWeekStart, 2)),
+      time: '12:00',
+      title: 'Lunch z AnnÄ…',
+      location: 'Restauracja â€žZdrowa Kuchniaâ€ť',
+      badge: '90 min',
+      dotClass: 'bg-emerald-500',
+      badgeClass: 'bg-emerald-500/10 text-emerald-600',
+      note: 'Rezerwacja na nazwisko Wysocka.',
+      checklist: [],
+      linkedShoppingItemIds: [],
+    },
+    {
+      id: '4',
+      date: toDateKey(addDays(initialWeekStart, 3)),
+      time: '14:00',
+      title: 'PrzeglÄ…d projektu',
+      location: 'PrzygotowaÄ‡ prezentacjÄ™',
+      badge: 'Praca',
+      dotClass: 'bg-orange-500',
+      badgeClass: 'bg-orange-500/10 text-orange-600',
+      note: 'SprawdziÄ‡ status backendu i frontendowego kalendarza.',
+      checklist: [
+        { id: '4-1', label: 'Slajdy', done: false },
+        { id: '4-2', label: 'Demo', done: false },
+      ],
+      linkedShoppingItemIds: [],
+    },
+    {
+      id: '5',
+      date: toDateKey(addDays(initialWeekStart, 3)),
+      time: '16:30',
+      title: 'Zakupy w Biedronce',
+      location: 'Biedronka osiedlowa',
+      badge: 'Zakupy',
+      dotClass: 'bg-rose-500',
+      badgeClass: 'bg-rose-500/10 text-rose-600',
+      note: 'SprawdĹş, co juĹĽ jest w domu.',
+      linkedShoppingItemIds: ['pool-1', 'pool-2'],
+    },
+    {
+      id: '6',
+      date: toDateKey(addDays(initialWeekStart, 5)),
+      time: '18:00',
+      title: 'Trening siĹ‚owy',
+      location: 'SiĹ‚ownia Power Gym',
+      badge: '75 min',
+      dotClass: 'bg-slate-500',
+      badgeClass: 'bg-slate-500/10 text-slate-600',
+      note: 'DzieĹ„ nĂłg + rozciÄ…ganie.',
+      checklist: [{ id: '6-1', label: 'Karnet', done: true }],
+      linkedShoppingItemIds: [],
+    },
+  ];
+
+  const defaultShoppingPool: ShoppingPoolItem[] = [
+    { id: 'pool-1', label: 'Pasta do zÄ™bĂłw', done: false, linkedEventIds: ['5'] },
+    { id: 'pool-2', label: 'Szampon', done: false, linkedEventIds: ['5'] },
+    { id: 'pool-3', label: 'Mleko', done: false, linkedEventIds: [] },
+    { id: 'pool-4', label: 'Makaron', done: false, linkedEventIds: [] },
+  ];
+
   const [activeTab, setActiveTab] = useState<TabId>('home');
+  const [shoppingPool, setShoppingPool] = useState<ShoppingPoolItem[]>(() => {
+    try {
+      const raw = window.localStorage.getItem(STORAGE_KEY);
+      if (!raw) return defaultShoppingPool;
+      const parsed = JSON.parse(raw);
+      return parsed.shoppingPool ?? defaultShoppingPool;
+    } catch {
+      return defaultShoppingPool;
+    }
+  });
+
+  const [events, setEvents] = useState<CalendarEvent[]>(() => {
+    try {
+      const raw = window.localStorage.getItem(STORAGE_KEY);
+      if (!raw) return defaultEvents;
+      const parsed = JSON.parse(raw);
+      return parsed.events ?? defaultEvents;
+    } catch {
+      return defaultEvents;
+    }
+  });
+
+  const [chatMessages, setChatMessages] = useState<ChatMessage[]>(() => {
+    try {
+      const raw = window.localStorage.getItem(STORAGE_KEY);
+      if (!raw) return [];
+      const parsed = JSON.parse(raw);
+      return parsed.chatMessages ?? [];
+    } catch {
+      return [];
+    }
+  });
+
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(
+        STORAGE_KEY,
+        JSON.stringify({
+          shoppingPool,
+          events,
+          chatMessages,
+        })
+      );
+    } catch {
+      // ignore local storage errors
+    }
+  }, [shoppingPool, events, chatMessages]);
+
+  function handleShoppingDetected(itemLabel: string) {
+    setShoppingPool((prev) => {
+      const exists = prev.some((item) => item.label.toLowerCase() === itemLabel.toLowerCase());
+      if (exists) return prev;
+      return [
+        ...prev,
+        {
+          id: `pool-${Date.now()}`,
+          label: itemLabel,
+          done: false,
+          linkedEventIds: [],
+        },
+      ];
+    });
+  }
 
   let screen: React.ReactNode;
 
   switch (activeTab) {
     case 'chat':
-      screen = <ChatScreen />;
+      screen = (
+        <ChatScreen
+          onShoppingDetected={handleShoppingDetected}
+          chatMessages={chatMessages}
+          setChatMessages={setChatMessages}
+        />
+      );
       break;
     case 'plan':
       screen = <PlanScreen />;
       break;
     case 'calendar':
-      screen = <CalendarScreen />;
+      screen = (
+        <CalendarScreen
+          shoppingPool={shoppingPool}
+          setShoppingPool={setShoppingPool}
+          events={events}
+          setEvents={setEvents}
+        />
+      );
       break;
     case 'projects':
-      screen = <ProjectsScreen />;
+      screen = <ProjectsScreen shoppingPool={shoppingPool} />;
       break;
     case 'settings':
       screen = <SettingsScreen />;
@@ -1634,3 +1777,4 @@ export default function App() {
     </PhoneShell>
   );
 }
+
