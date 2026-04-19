@@ -1,4 +1,4 @@
-﻿import React, { useEffect, useMemo, useRef, useState } from 'react';
+﻿import React, { createContext, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Bell,
   Home,
@@ -19,7 +19,6 @@ import {
   Send,
   MoreVertical,
   UserCircle2,
-  SlidersHorizontal,
   BookOpen,
   Lightbulb,
   ShoppingCart,
@@ -34,7 +33,29 @@ import {
   Square,
   Trash2,
   Unlink,
+  Shield,
+  CreditCard,
+  Link2,
+  Database,
+  LogOut,
+  Download,
+  Upload,
+  AlertTriangle,
+  BarChart3,
+  Lock,
+  KeyRound,
+  Smartphone,
 } from 'lucide-react';
+import type { IconType } from 'react-icons';
+import {
+  SiGooglecalendar,
+  SiApple,
+  SiGoogledrive,
+  SiNotion,
+  SiSlack,
+  SiOllama,
+} from 'react-icons/si';
+import { FaMicrosoft } from 'react-icons/fa6';
 
 type TabId = 'home' | 'chat' | 'plan' | 'calendar' | 'projects' | 'settings';
 
@@ -111,7 +132,189 @@ const copy = {
   navSettings: 'Ustawienia',
 };
 
-const OLLAMA_MODEL = 'llama3:latest';
+const DEFAULT_OLLAMA_URL = 'http://127.0.0.1:11434';
+const DEFAULT_OLLAMA_MODEL = 'llama3:latest';
+
+const OLLAMA_URL_KEY = 'jarvis_ollama_url_v1';
+const OLLAMA_MODEL_KEY = 'jarvis_ollama_model_v1';
+const PERM_NOTIFICATIONS_KEY = 'jarvis_perm_notifications_v1';
+const PERM_MIC_KEY = 'jarvis_perm_mic_v1';
+const PERM_LOCATION_KEY = 'jarvis_perm_location_v1';
+
+function cleanUrl(url: string) {
+  return url.trim().replace(/\/+$/, '');
+}
+
+function readOllamaUrl(): string {
+  try {
+    const v = localStorage.getItem(OLLAMA_URL_KEY)?.trim();
+    return v || DEFAULT_OLLAMA_URL;
+  } catch {
+    return DEFAULT_OLLAMA_URL;
+  }
+}
+
+function readOllamaModel(): string {
+  try {
+    const v = localStorage.getItem(OLLAMA_MODEL_KEY)?.trim();
+    return v || DEFAULT_OLLAMA_MODEL;
+  } catch {
+    return DEFAULT_OLLAMA_MODEL;
+  }
+}
+
+type UserProfile = {
+  firstName: string;
+  lastName: string;
+  email: string;
+};
+
+const PROFILE_KEY = 'jarvis_profile_v1';
+const DEFAULT_PROFILE: UserProfile = {
+  firstName: 'Mateusz',
+  lastName: '',
+  email: '',
+};
+
+function readProfile(): UserProfile {
+  try {
+    const raw = localStorage.getItem(PROFILE_KEY);
+    if (!raw) return { ...DEFAULT_PROFILE };
+    const parsed = JSON.parse(raw);
+    return {
+      firstName: typeof parsed?.firstName === 'string' ? parsed.firstName : DEFAULT_PROFILE.firstName,
+      lastName: typeof parsed?.lastName === 'string' ? parsed.lastName : DEFAULT_PROFILE.lastName,
+      email: typeof parsed?.email === 'string' ? parsed.email : DEFAULT_PROFILE.email,
+    };
+  } catch {
+    return { ...DEFAULT_PROFILE };
+  }
+}
+
+function writeProfile(p: UserProfile) {
+  try {
+    localStorage.setItem(PROFILE_KEY, JSON.stringify(p));
+  } catch {}
+}
+
+function getInitials(p: UserProfile): string {
+  const first = p.firstName.trim()[0] || '';
+  const last = p.lastName.trim()[0] || '';
+  const combined = (first + last).toUpperCase();
+  return combined || '?';
+}
+
+type Consents = {
+  marketing: boolean;
+  analytics: boolean;
+  personalization: boolean;
+};
+
+const CONSENTS_KEY = 'jarvis_consents_v1';
+const DEFAULT_CONSENTS: Consents = {
+  marketing: false,
+  analytics: false,
+  personalization: false,
+};
+
+function readConsents(): Consents {
+  try {
+    const raw = localStorage.getItem(CONSENTS_KEY);
+    if (!raw) return { ...DEFAULT_CONSENTS };
+    const parsed = JSON.parse(raw);
+    return {
+      marketing: typeof parsed?.marketing === 'boolean' ? parsed.marketing : DEFAULT_CONSENTS.marketing,
+      analytics: typeof parsed?.analytics === 'boolean' ? parsed.analytics : DEFAULT_CONSENTS.analytics,
+      personalization:
+        typeof parsed?.personalization === 'boolean' ? parsed.personalization : DEFAULT_CONSENTS.personalization,
+    };
+  } catch {
+    return { ...DEFAULT_CONSENTS };
+  }
+}
+
+function writeConsents(c: Consents) {
+  try {
+    localStorage.setItem(CONSENTS_KEY, JSON.stringify(c));
+  } catch {}
+}
+
+type NotificationKind = 'reminder' | 'task' | 'ai' | 'integration';
+
+type AppNotification = {
+  id: string;
+  kind: NotificationKind;
+  title: string;
+  body: string;
+  time: string;
+};
+
+const MOCK_NOTIFICATIONS: AppNotification[] = [
+  {
+    id: 'n1',
+    kind: 'reminder',
+    title: 'Spotkanie z zespołem za 30 minut',
+    body: 'O 11:00 • Sala konferencyjna',
+    time: '10:30',
+  },
+  {
+    id: 'n2',
+    kind: 'task',
+    title: 'Nowe zadanie w projekcie',
+    body: 'Dokończyć raport tygodniowy',
+    time: '09:15',
+  },
+  {
+    id: 'n3',
+    kind: 'ai',
+    title: 'Jarvis sugeruje',
+    body: 'Przełóż zakupy na środę — jutro masz 4 spotkania pod rząd',
+    time: 'wczoraj',
+  },
+  {
+    id: 'n4',
+    kind: 'reminder',
+    title: 'Siłownia',
+    body: 'Dziś o 18:00',
+    time: 'wczoraj',
+  },
+  {
+    id: 'n5',
+    kind: 'integration',
+    title: 'Google Calendar',
+    body: 'Dodano wydarzenie: Dentysta (czwartek 10:30)',
+    time: '2 dni temu',
+  },
+];
+
+const NOTIFICATIONS_READ_KEY = 'jarvis_notifications_read_v1';
+const NOTIFICATIONS_DISMISSED_KEY = 'jarvis_notifications_dismissed_v1';
+
+function readIdList(key: string): string[] {
+  try {
+    const raw = localStorage.getItem(key);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed.filter((x) => typeof x === 'string') : [];
+  } catch {
+    return [];
+  }
+}
+
+function writeIdList(key: string, ids: string[]) {
+  try {
+    localStorage.setItem(key, JSON.stringify(ids));
+  } catch {}
+}
+
+type NavContextType = {
+  goToAccount: () => void;
+  openNotifications: () => void;
+  unreadCount: number;
+};
+
+const NavContext = createContext<NavContextType | null>(null);
+
 const STORAGE_KEY = 'jarvis_calendar_v6_state';
 
 const WEEKDAYS_SHORT = ['Pon', 'Wt', 'Śr', 'Czw', 'Pt', 'Sob', 'Ndz'];
@@ -365,26 +568,46 @@ function Header({
 
       <div className="flex shrink-0 items-center gap-3">
         {extraRight}
-        {showBell ? (
-          <div className="relative">
-            <Bell className="h-8 w-8 text-slate-700" />
-            <div className="absolute -right-1 -top-2 flex h-7 w-7 items-center justify-center rounded-full bg-pink-400 text-sm font-semibold text-white">
-              3
-            </div>
-          </div>
-        ) : null}
-
-        {showProfile ? (
-          <div className="h-14 w-14 overflow-hidden rounded-full border-2 border-indigo-200 shadow-sm">
-            <img
-              src="https://i.pravatar.cc/100?img=12"
-              alt="Profil"
-              className="h-full w-full object-cover"
-            />
-          </div>
-        ) : null}
+        {showBell ? <HeaderBell /> : null}
+        {showProfile ? <HeaderAvatar /> : null}
       </div>
     </header>
+  );
+}
+
+function HeaderBell() {
+  const nav = useContext(NavContext);
+  const unread = nav?.unreadCount ?? 0;
+  return (
+    <button
+      type="button"
+      onClick={() => nav?.openNotifications()}
+      className="relative flex h-10 w-10 items-center justify-center rounded-full transition hover:bg-white/60"
+      aria-label="Powiadomienia"
+    >
+      <Bell className="h-8 w-8 text-slate-700" />
+      {unread > 0 ? (
+        <div className="absolute -right-0.5 -top-1 flex h-6 min-w-[24px] items-center justify-center rounded-full bg-pink-400 px-1 text-[13px] font-semibold text-white">
+          {unread > 9 ? '9+' : unread}
+        </div>
+      ) : null}
+    </button>
+  );
+}
+
+function HeaderAvatar() {
+  const nav = useContext(NavContext);
+  const profile = readProfile();
+  const initials = getInitials(profile);
+  return (
+    <button
+      type="button"
+      onClick={() => nav?.goToAccount()}
+      className="flex h-14 w-14 shrink-0 items-center justify-center rounded-full border-2 border-indigo-200 bg-[linear-gradient(180deg,#7196ff_0%,#4f75ff_100%)] text-[18px] font-bold text-white shadow-sm transition hover:scale-105"
+      aria-label="Moje konto"
+    >
+      {initials}
+    </button>
   );
 }
 
@@ -519,6 +742,9 @@ function PhoneShell({
 }
 
 function HomeScreen({ setActiveTab }: { setActiveTab: (tab: TabId) => void }) {
+  const profile = readProfile();
+  const firstName = profile.firstName.trim() || DEFAULT_PROFILE.firstName;
+
   return (
     <div className="flex h-full flex-col">
       <Header title="Home" subtitle={copy.version} beta />
@@ -535,7 +761,7 @@ function HomeScreen({ setActiveTab }: { setActiveTab: (tab: TabId) => void }) {
 
           <div className="min-w-0 flex-1 pr-1">
             <h2 className="text-[24px] font-semibold leading-tight tracking-[-0.05em] text-slate-800">
-              {copy.welcome} {copy.wave}
+              Witaj {firstName}! {copy.wave}
             </h2>
             <p className="mt-1 text-[14px] leading-5 text-slate-600">
               {copy.todayLine1}
@@ -638,11 +864,6 @@ function HomeScreen({ setActiveTab }: { setActiveTab: (tab: TabId) => void }) {
         </div>
       </section>
 
-      <div className="mt-auto flex justify-end pb-2 pr-2">
-        <button className="z-20 flex h-14 w-14 items-center justify-center rounded-full bg-[linear-gradient(180deg,#7196ff_0%,#4f75ff_100%)] text-white shadow-[0_18px_30px_rgba(77,116,255,0.28)] transition hover:scale-105" type="button">
-          <Plus className="h-7 w-7" />
-        </button>
-      </div>
     </div>
   );
 }
@@ -760,13 +981,15 @@ function ChatScreen({
     }
 
     setIsSending(true);
+    const ollamaUrl = readOllamaUrl();
+    const ollamaModel = readOllamaModel();
 
     try {
-      const response = await fetch('http://127.0.0.1:11434/api/chat', {
+      const response = await fetch(`${ollamaUrl}/api/chat`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          model: OLLAMA_MODEL,
+          model: ollamaModel,
           stream: false,
           messages: nextMessages
             .filter((m) => m.role !== 'system')
@@ -799,12 +1022,12 @@ function ChatScreen({
       const message =
         error instanceof Error ? error.message.toLowerCase() : '';
 
-      let userError = `Nie mogę połączyć się z Ollamą. Upewnij się, że Ollama działa lokalnie i masz model ${OLLAMA_MODEL}.`;
+      let userError = `Nie mogę połączyć się z Ollamą. Upewnij się, że Ollama działa pod ${ollamaUrl} i masz model ${ollamaModel}.`;
 
       if (message.includes('not found') || message.includes('model')) {
-        userError = `Ollama działa, ale model ${OLLAMA_MODEL} nie jest dostępny albo odpowiedź API jest błędna.`;
+        userError = `Ollama działa, ale model ${ollamaModel} nie jest dostępny.`;
       } else if (message.includes('failed to fetch') || message.includes('network')) {
-        userError = 'Nie udało się połączyć z lokalną Ollamą pod adresem http://127.0.0.1:11434.';
+        userError = `Nie udało się połączyć z Ollamą pod adresem ${ollamaUrl}. Sprawdź adres w Ustawieniach.`;
       }
 
       setChatMessages((prev) => [
@@ -1925,31 +2148,1530 @@ function ProjectsScreen({
 function ToggleRow({
   icon,
   title,
+  checked,
+  onChange,
 }: {
   icon: React.ReactNode;
   title: string;
+  checked: boolean;
+  onChange: (next: boolean) => void;
 }) {
   return (
-    <div className="flex items-center justify-between px-3 py-4">
+    <button
+      type="button"
+      onClick={() => onChange(!checked)}
+      className="flex w-full items-center justify-between px-3 py-4 text-left"
+    >
       <div className="flex items-center gap-4 min-w-0">
         {icon}
         <span className="text-[18px] text-slate-700">{title}</span>
       </div>
 
-      <div className="flex h-9 w-20 shrink-0 items-center rounded-full bg-indigo-400 px-1">
-        <div className="ml-auto flex h-7 w-7 items-center justify-center rounded-full bg-white text-indigo-300">
-          <Check className="h-4 w-4" />
+      <div
+        className={`flex h-9 w-20 shrink-0 items-center rounded-full px-1 transition-colors ${
+          checked ? 'bg-indigo-400' : 'bg-slate-300'
+        }`}
+      >
+        <div
+          className={`flex h-7 w-7 items-center justify-center rounded-full bg-white text-indigo-400 ${
+            checked ? 'ml-auto' : ''
+          }`}
+        >
+          {checked ? <Check className="h-4 w-4" /> : null}
+        </div>
+      </div>
+    </button>
+  );
+}
+
+type SettingsPath =
+  | 'root'
+  | 'account'
+  | 'profile'
+  | 'security'
+  | 'plan'
+  | 'integrations'
+  | 'data';
+
+function SubHeader({ title, onBack }: { title: string; onBack: () => void }) {
+  return (
+    <div className="flex items-center gap-3 py-4">
+      <button
+        type="button"
+        onClick={onBack}
+        className="flex h-10 w-10 items-center justify-center rounded-full bg-white/70 shadow-sm"
+        aria-label="Wstecz"
+      >
+        <ChevronLeft className="h-6 w-6 text-slate-700" />
+      </button>
+      <div className="text-[24px] font-semibold text-slate-800">{title}</div>
+    </div>
+  );
+}
+
+function FormField({
+  label,
+  value,
+  onChange,
+  type = 'text',
+  placeholder,
+  autoComplete,
+}: {
+  label: string;
+  value: string;
+  onChange: (v: string) => void;
+  type?: string;
+  placeholder?: string;
+  autoComplete?: string;
+}) {
+  return (
+    <div>
+      <label className="mb-1 block text-[13px] font-medium text-slate-500">{label}</label>
+      <input
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        type={type}
+        placeholder={placeholder}
+        autoCapitalize={type === 'email' || type === 'password' ? 'off' : undefined}
+        autoCorrect="off"
+        spellCheck={false}
+        autoComplete={autoComplete}
+        className="w-full rounded-[14px] border border-slate-200 bg-white px-3 py-2 text-[15px] text-slate-700 outline-none focus:border-indigo-300"
+      />
+    </div>
+  );
+}
+
+function AccountScreen({
+  onBack,
+  onNavigate,
+}: {
+  onBack: () => void;
+  onNavigate: (p: SettingsPath) => void;
+}) {
+  const [profile] = useState(() => readProfile());
+  const [logoutHint, setLogoutHint] = useState('');
+
+  const fullName =
+    [profile.firstName, profile.lastName].filter((v) => v.trim()).join(' ').trim() ||
+    'Ustaw imię w Profilu';
+  const initials = getInitials(profile);
+
+  const rows: {
+    key: SettingsPath;
+    icon: React.ReactNode;
+    title: string;
+    desc: string;
+  }[] = [
+    {
+      key: 'profile',
+      icon: <UserCircle2 className="h-8 w-8 text-indigo-300" />,
+      title: 'Profil',
+      desc: 'Imię, email, zdjęcie',
+    },
+    {
+      key: 'security',
+      icon: <Shield className="h-8 w-8 text-indigo-300" />,
+      title: 'Bezpieczeństwo',
+      desc: 'Hasło, 2FA, aktywne sesje',
+    },
+    {
+      key: 'plan',
+      icon: <CreditCard className="h-8 w-8 text-indigo-300" />,
+      title: 'Plan i płatności',
+      desc: 'Free • zarządzaj subskrypcją',
+    },
+    {
+      key: 'integrations',
+      icon: <Link2 className="h-8 w-8 text-indigo-300" />,
+      title: 'Integracje',
+      desc: 'Google Calendar, Drive, Slack',
+    },
+    {
+      key: 'data',
+      icon: <Database className="h-8 w-8 text-indigo-300" />,
+      title: 'Dane i prywatność',
+      desc: 'Eksport, import, usuń konto',
+    },
+  ];
+
+  return (
+    <div className="flex h-full flex-col">
+      <SubHeader title="Moje konto" onBack={onBack} />
+
+      <div className="min-h-0 flex-1 overflow-y-auto pr-1 pb-6">
+        <div className="rounded-[22px] bg-white/75 p-5 shadow-sm">
+          <div className="flex items-center gap-4">
+            <div className="flex h-20 w-20 shrink-0 items-center justify-center rounded-full bg-[linear-gradient(180deg,#7196ff_0%,#4f75ff_100%)] text-[26px] font-bold text-white">
+              {initials}
+            </div>
+            <div className="min-w-0 flex-1">
+              <div className="truncate text-[18px] font-semibold text-slate-800">{fullName}</div>
+              <div className="mt-0.5 truncate text-[14px] text-slate-500">
+                {profile.email || 'Brak adresu email'}
+              </div>
+              <span className="mt-2 inline-block rounded-full bg-indigo-100 px-3 py-0.5 text-[12px] font-semibold text-indigo-600">
+                Free
+              </span>
+            </div>
+          </div>
+        </div>
+
+        <div className="mt-4 rounded-[22px] bg-white/75 p-3 shadow-sm">
+          {rows.map((row, i) => (
+            <button
+              key={row.key}
+              type="button"
+              onClick={() => onNavigate(row.key)}
+              className={`flex w-full items-center justify-between gap-3 px-3 py-4 text-left ${
+                i < rows.length - 1 ? 'border-b border-slate-200' : ''
+              }`}
+            >
+              <div className="flex min-w-0 items-center gap-4">
+                {row.icon}
+                <div className="min-w-0">
+                  <div className="text-[17px] text-slate-700">{row.title}</div>
+                  <div className="text-[13px] text-slate-500">{row.desc}</div>
+                </div>
+              </div>
+              <ChevronRight className="h-7 w-7 shrink-0 text-indigo-300" />
+            </button>
+          ))}
+        </div>
+
+        <button
+          type="button"
+          onClick={() => setLogoutHint('Wkrótce — wymaga backendu z logowaniem.')}
+          className="mt-5 flex w-full items-center justify-center gap-2 rounded-[18px] bg-rose-50 px-4 py-3 text-[15px] font-semibold text-rose-600"
+        >
+          <LogOut className="h-5 w-5" />
+          Wyloguj
+        </button>
+        {logoutHint ? (
+          <div className="mt-2 rounded-[14px] bg-white/60 px-4 py-2 text-center text-[13px] text-slate-600">
+            {logoutHint}
+          </div>
+        ) : null}
+      </div>
+    </div>
+  );
+}
+
+function ProfileScreen({ onBack }: { onBack: () => void }) {
+  const [p, setP] = useState<UserProfile>(() => readProfile());
+  const [hint, setHint] = useState('');
+
+  function save() {
+    const trimmed: UserProfile = {
+      firstName: p.firstName.trim(),
+      lastName: p.lastName.trim(),
+      email: p.email.trim(),
+    };
+    writeProfile(trimmed);
+    setP(trimmed);
+    setHint('Zapisano.');
+    window.setTimeout(() => setHint(''), 2000);
+  }
+
+  const initials = getInitials(p);
+
+  return (
+    <div className="flex h-full flex-col">
+      <SubHeader title="Profil" onBack={onBack} />
+
+      <div className="min-h-0 flex-1 overflow-y-auto pr-1 pb-6">
+        <div className="flex flex-col items-center">
+          <div className="flex h-24 w-24 items-center justify-center rounded-full bg-[linear-gradient(180deg,#7196ff_0%,#4f75ff_100%)] text-[34px] font-bold text-white">
+            {initials}
+          </div>
+          <button
+            type="button"
+            disabled
+            className="mt-3 cursor-not-allowed rounded-full bg-slate-100 px-4 py-2 text-[13px] font-medium text-slate-400"
+          >
+            Zmień zdjęcie (wkrótce)
+          </button>
+        </div>
+
+        <div className="mt-5 space-y-3 rounded-[22px] bg-white/75 p-4 shadow-sm">
+          <FormField
+            label="Imię"
+            value={p.firstName}
+            onChange={(v) => setP({ ...p, firstName: v })}
+            placeholder="Imię"
+          />
+          <FormField
+            label="Nazwisko"
+            value={p.lastName}
+            onChange={(v) => setP({ ...p, lastName: v })}
+            placeholder="Nazwisko"
+          />
+          <FormField
+            label="Email"
+            type="email"
+            value={p.email}
+            onChange={(v) => setP({ ...p, email: v })}
+            placeholder="ja@example.com"
+          />
+        </div>
+
+        <button
+          type="button"
+          onClick={save}
+          className="mt-4 w-full rounded-full bg-[linear-gradient(90deg,#4f75ff,#3b82f6)] px-4 py-3 text-[15px] font-semibold text-white"
+        >
+          Zapisz
+        </button>
+        {hint ? (
+          <div className="mt-2 text-center text-[13px] text-slate-500">{hint}</div>
+        ) : null}
+      </div>
+    </div>
+  );
+}
+
+function NotificationsScreen({
+  notifications,
+  readIds,
+  onMarkAsRead,
+  onMarkAllRead,
+  onDismiss,
+  onClearAll,
+  onClose,
+}: {
+  notifications: AppNotification[];
+  readIds: string[];
+  onMarkAsRead: (id: string) => void;
+  onMarkAllRead: () => void;
+  onDismiss: (id: string) => void;
+  onClearAll: () => void;
+  onClose: () => void;
+}) {
+  const readSet = new Set(readIds);
+  const unreadCount = notifications.filter((n) => !readSet.has(n.id)).length;
+
+  const kindMeta: Record<NotificationKind, { label: string; color: string; Icon: React.ElementType }> = {
+    reminder: { label: 'Przypomnienie', color: '#F59E0B', Icon: Bell },
+    task: { label: 'Zadanie', color: '#4F75FF', Icon: CheckSquare },
+    ai: { label: 'Jarvis', color: '#8B5CF6', Icon: Lightbulb },
+    integration: { label: 'Integracja', color: '#10B981', Icon: Link2 },
+  };
+
+  return (
+    <div className="flex h-full flex-col">
+      <div className="flex items-center justify-between gap-3 py-4">
+        <div className="flex items-center gap-3">
+          <button
+            type="button"
+            onClick={onClose}
+            className="flex h-10 w-10 items-center justify-center rounded-full bg-white/70 shadow-sm"
+            aria-label="Zamknij"
+          >
+            <ChevronLeft className="h-6 w-6 text-slate-700" />
+          </button>
+          <div className="text-[24px] font-semibold text-slate-800">Powiadomienia</div>
+        </div>
+        {unreadCount > 0 ? (
+          <button
+            type="button"
+            onClick={onMarkAllRead}
+            className="rounded-full bg-white/70 px-3 py-1.5 text-[12px] font-semibold text-indigo-600"
+          >
+            Oznacz jako przeczytane
+          </button>
+        ) : null}
+      </div>
+
+      <div className="min-h-0 flex-1 overflow-y-auto pr-1 pb-6">
+        {notifications.length === 0 ? (
+          <div className="rounded-[22px] bg-white/60 p-6 text-center">
+            <Bell className="mx-auto h-8 w-8 text-slate-400" />
+            <div className="mt-2 text-[14px] font-semibold text-slate-700">Brak powiadomień</div>
+            <div className="mt-1 text-[12px] leading-5 text-slate-500">
+              Tu zobaczysz przypomnienia o wydarzeniach, nowe zadania i sugestie Jarvisa.
+            </div>
+          </div>
+        ) : (
+          <div className="space-y-2">
+            {notifications.map((n) => {
+              const isUnread = !readSet.has(n.id);
+              const meta = kindMeta[n.kind];
+              return (
+                <div
+                  key={n.id}
+                  className={`flex items-start gap-3 rounded-[18px] px-4 py-3 shadow-sm transition ${
+                    isUnread ? 'bg-white' : 'bg-white/50'
+                  }`}
+                >
+                  <button
+                    type="button"
+                    onClick={() => isUnread && onMarkAsRead(n.id)}
+                    className="flex min-w-0 flex-1 items-start gap-3 text-left"
+                  >
+                    <div
+                      className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full"
+                      style={{ backgroundColor: `${meta.color}20` }}
+                    >
+                      <meta.Icon className="h-5 w-5" color={meta.color} />
+                    </div>
+                    <div className="min-w-0 flex-1">
+                      <div className="flex items-start gap-2">
+                        <div
+                          className={`min-w-0 flex-1 text-[14px] ${
+                            isUnread ? 'font-semibold text-slate-800' : 'font-medium text-slate-600'
+                          }`}
+                        >
+                          {n.title}
+                        </div>
+                        {isUnread ? (
+                          <div className="mt-1.5 h-2 w-2 shrink-0 rounded-full bg-indigo-500" />
+                        ) : null}
+                      </div>
+                      <div className="mt-0.5 text-[13px] leading-5 text-slate-500">{n.body}</div>
+                      <div className="mt-1 flex items-center gap-2 text-[11px] text-slate-400">
+                        <span
+                          className="rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide"
+                          style={{ backgroundColor: `${meta.color}18`, color: meta.color }}
+                        >
+                          {meta.label}
+                        </span>
+                        <span>•</span>
+                        <span>{n.time}</span>
+                      </div>
+                    </div>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => onDismiss(n.id)}
+                    className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-slate-400 transition hover:bg-slate-100 hover:text-slate-600"
+                    aria-label="Usuń powiadomienie"
+                  >
+                    <X className="h-4 w-4" />
+                  </button>
+                </div>
+              );
+            })}
+
+            <button
+              type="button"
+              onClick={onClearAll}
+              className="mt-2 flex w-full items-center justify-center gap-2 rounded-[18px] bg-rose-50 px-4 py-3 text-[13px] font-semibold text-rose-600"
+            >
+              <Trash2 className="h-4 w-4" />
+              Wyczyść wszystkie
+            </button>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+type Integration = {
+  id: string;
+  name: string;
+  description: string;
+  Icon: IconType;
+  color: string;
+};
+
+function IntegrationsScreen({ onBack }: { onBack: () => void }) {
+  const [hint, setHint] = useState('');
+  const [hintTone, setHintTone] = useState<'info' | 'success' | 'error'>('info');
+
+  function showHint(m: string, t: 'info' | 'success' | 'error' = 'info') {
+    setHint(m);
+    setHintTone(t);
+  }
+
+  const categories: { title: string; items: Integration[] }[] = [
+    {
+      title: 'Kalendarze',
+      items: [
+        {
+          id: 'google_calendar',
+          name: 'Google Calendar',
+          description: 'Dwukierunkowa synchronizacja wydarzeń',
+          Icon: SiGooglecalendar,
+          color: '#4285F4',
+        },
+        {
+          id: 'apple_calendar',
+          name: 'Apple Calendar',
+          description: 'Synchronizacja z iCloud',
+          Icon: SiApple,
+          color: '#111111',
+        },
+        {
+          id: 'outlook',
+          name: 'Microsoft Outlook',
+          description: 'Kalendarz z Microsoft 365',
+          Icon: FaMicrosoft,
+          color: '#0078D4',
+        },
+      ],
+    },
+    {
+      title: 'Pliki i notatki',
+      items: [
+        {
+          id: 'google_drive',
+          name: 'Google Drive',
+          description: 'Załączniki i pliki do zadań',
+          Icon: SiGoogledrive,
+          color: '#1FA463',
+        },
+        {
+          id: 'notion',
+          name: 'Notion',
+          description: 'Importuj strony jako zadania',
+          Icon: SiNotion,
+          color: '#111111',
+        },
+      ],
+    },
+    {
+      title: 'Komunikacja',
+      items: [
+        {
+          id: 'slack',
+          name: 'Slack',
+          description: 'Powiadomienia i szybkie dodawanie zadań',
+          Icon: SiSlack,
+          color: '#4A154B',
+        },
+      ],
+    },
+  ];
+
+  function connect(name: string) {
+    showHint(`Wkrótce — połączenie z ${name} przez OAuth wymaga backendu.`, 'info');
+  }
+
+  const hintClass =
+    hintTone === 'success'
+      ? 'bg-emerald-50 text-emerald-700'
+      : hintTone === 'error'
+      ? 'bg-rose-50 text-rose-600'
+      : 'bg-white/70 text-slate-600';
+
+  return (
+    <div className="flex h-full flex-col">
+      <SubHeader title="Integracje" onBack={onBack} />
+
+      <div className="min-h-0 flex-1 overflow-y-auto pr-1 pb-6">
+        <div className="rounded-[22px] bg-white/60 p-4 text-[13px] leading-5 text-slate-600">
+          Połącz Jarvisa z aplikacjami, których używasz na co dzień. Uwierzytelnianie przez OAuth — nigdy nie pytamy o Twoje hasła.
+        </div>
+
+        {categories.map((cat) => (
+          <div key={cat.title}>
+            <h3 className="mt-6 mb-2 text-[15px] font-semibold text-slate-700">{cat.title}</h3>
+            <div className="rounded-[22px] bg-white/75 p-3 shadow-sm">
+              {cat.items.map((it, i) => (
+                <div
+                  key={it.id}
+                  className={`flex items-center gap-3 px-2 py-3 ${
+                    i < cat.items.length - 1 ? 'border-b border-slate-200' : ''
+                  }`}
+                >
+                  <div
+                    className="flex h-11 w-11 shrink-0 items-center justify-center rounded-[14px]"
+                    style={{ backgroundColor: `${it.color}15` }}
+                  >
+                    <it.Icon size={22} color={it.color} />
+                  </div>
+                  <div className="min-w-0 flex-1">
+                    <div className="flex items-center gap-2">
+                      <div className="truncate text-[15px] font-semibold text-slate-800">
+                        {it.name}
+                      </div>
+                      <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-slate-500">
+                        Niepołączone
+                      </span>
+                    </div>
+                    <div className="truncate text-[12px] text-slate-500">{it.description}</div>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => connect(it.name)}
+                    className="shrink-0 rounded-full bg-[linear-gradient(90deg,#4f75ff,#3b82f6)] px-4 py-1.5 text-[12px] font-semibold text-white"
+                  >
+                    Połącz
+                  </button>
+                </div>
+              ))}
+            </div>
+          </div>
+        ))}
+
+        {hint ? (
+          <div className={`mt-4 rounded-[14px] px-4 py-3 text-[13px] leading-5 ${hintClass}`}>
+            {hint}
+          </div>
+        ) : null}
+
+        <div className="mt-6 rounded-[18px] bg-white/60 p-4 text-center text-[12px] leading-5 text-slate-500">
+          Brakuje Twojej integracji? Napisz do nas — rozważymy dodanie.
         </div>
       </div>
     </div>
   );
 }
 
-function SettingsScreen() {
+type PlanDef = {
+  id: 'free' | 'pro' | 'business';
+  name: string;
+  price: string;
+  period: string;
+  highlight?: boolean;
+  features: string[];
+  cta: string;
+};
+
+function BillingScreen({ onBack }: { onBack: () => void }) {
+  const [hint, setHint] = useState('');
+  const [hintTone, setHintTone] = useState<'info' | 'success' | 'error'>('info');
+  const [promo, setPromo] = useState('');
+
+  function showHint(m: string, t: 'info' | 'success' | 'error' = 'info') {
+    setHint(m);
+    setHintTone(t);
+  }
+
+  const currentPlanId: PlanDef['id'] = 'free';
+
+  const plans: PlanDef[] = [
+    {
+      id: 'free',
+      name: 'Free',
+      price: '0 zł',
+      period: 'na zawsze',
+      features: [
+        'Podstawowe planowanie dnia',
+        'Do 3 projektów',
+        'Historia 30 dni',
+        'Chat z lokalną Ollamą',
+      ],
+      cta: 'Obecny plan',
+    },
+    {
+      id: 'pro',
+      name: 'Pro',
+      price: '29 zł',
+      period: '/ mies',
+      highlight: true,
+      features: [
+        'Wszystko z Free',
+        'Nielimitowane projekty',
+        'AI asystent (Claude)',
+        'Integracje z kalendarzami',
+        'Historia bez limitu',
+        'Priorytetowe wsparcie',
+      ],
+      cta: 'Wybierz Pro',
+    },
+    {
+      id: 'business',
+      name: 'Business',
+      price: '79 zł',
+      period: '/ mies / użytkownik',
+      features: [
+        'Wszystko z Pro',
+        'Zespoły i role',
+        'Udostępnianie projektów',
+        'Single Sign-On (SSO)',
+        'Raporty i eksport PDF',
+        'Dedykowany opiekun',
+      ],
+      cta: 'Wybierz Business',
+    },
+  ];
+
+  function selectPlan(p: PlanDef) {
+    if (p.id === currentPlanId) return;
+    showHint(`Wkrótce — przejście na plan ${p.name} wymaga integracji ze Stripe.`, 'info');
+  }
+
+  function redeemPromo() {
+    if (!promo.trim()) {
+      showHint('Wpisz kod promocyjny.', 'error');
+      return;
+    }
+    showHint('Wkrótce — realizacja kodów promocyjnych wymaga backendu.', 'info');
+  }
+
+  const hintClass =
+    hintTone === 'success'
+      ? 'bg-emerald-50 text-emerald-700'
+      : hintTone === 'error'
+      ? 'bg-rose-50 text-rose-600'
+      : 'bg-white/70 text-slate-600';
+
+  const currentPlan = plans.find((p) => p.id === currentPlanId)!;
+
+  return (
+    <div className="flex h-full flex-col">
+      <SubHeader title="Plan i płatności" onBack={onBack} />
+
+      <div className="min-h-0 flex-1 overflow-y-auto pr-1 pb-6">
+        <div className="rounded-[22px] bg-[linear-gradient(180deg,#eef2ff_0%,#e0e7ff_100%)] p-5 shadow-sm">
+          <div className="text-[11px] font-semibold uppercase tracking-wide text-indigo-600">
+            Obecny plan
+          </div>
+          <div className="mt-1 flex items-baseline gap-2">
+            <div className="text-[28px] font-bold text-slate-800">{currentPlan.name}</div>
+            <div className="text-[13px] text-slate-500">
+              {currentPlan.price} {currentPlan.period}
+            </div>
+          </div>
+          {currentPlanId === 'free' ? (
+            <div className="mt-2 text-[13px] leading-5 text-slate-600">
+              Ulepsz do Pro, żeby odblokować nielimitowane projekty, integracje z kalendarzami i AI asystenta.
+            </div>
+          ) : null}
+        </div>
+
+        <h3 className="mt-6 mb-3 text-[15px] font-semibold text-slate-700">Plany</h3>
+        <div className="space-y-3">
+          {plans.map((p) => {
+            const isCurrent = p.id === currentPlanId;
+            const highlight = !!p.highlight && !isCurrent;
+            return (
+              <div
+                key={p.id}
+                className={`rounded-[22px] p-5 shadow-sm ${
+                  isCurrent
+                    ? 'border-2 border-indigo-300 bg-white/75'
+                    : highlight
+                    ? 'bg-[linear-gradient(180deg,#4f75ff_0%,#3b82f6_100%)] text-white'
+                    : 'bg-white/75'
+                }`}
+              >
+                <div className="flex items-baseline justify-between gap-2">
+                  <div className="flex items-center gap-2">
+                    <div
+                      className={`text-[20px] font-bold ${
+                        highlight ? 'text-white' : 'text-slate-800'
+                      }`}
+                    >
+                      {p.name}
+                    </div>
+                    {highlight ? (
+                      <span className="rounded-full bg-white/20 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-white">
+                        Polecany
+                      </span>
+                    ) : null}
+                    {isCurrent ? (
+                      <span className="rounded-full bg-indigo-100 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-indigo-600">
+                        Aktywny
+                      </span>
+                    ) : null}
+                  </div>
+                  <div
+                    className={`text-right text-[17px] font-bold ${
+                      highlight ? 'text-white' : 'text-slate-800'
+                    }`}
+                  >
+                    {p.price}
+                    <span
+                      className={`ml-1 text-[11px] font-normal ${
+                        highlight ? 'text-white/80' : 'text-slate-500'
+                      }`}
+                    >
+                      {p.period}
+                    </span>
+                  </div>
+                </div>
+
+                <ul className="mt-3 space-y-1.5">
+                  {p.features.map((f, i) => (
+                    <li
+                      key={i}
+                      className={`flex items-start gap-2 text-[13px] leading-5 ${
+                        highlight ? 'text-white/90' : 'text-slate-600'
+                      }`}
+                    >
+                      <Check
+                        className={`mt-0.5 h-4 w-4 shrink-0 ${
+                          highlight ? 'text-white' : 'text-emerald-500'
+                        }`}
+                      />
+                      <span>{f}</span>
+                    </li>
+                  ))}
+                </ul>
+
+                <button
+                  type="button"
+                  onClick={() => selectPlan(p)}
+                  disabled={isCurrent}
+                  className={`mt-4 w-full rounded-full px-4 py-3 text-[14px] font-semibold ${
+                    isCurrent
+                      ? 'cursor-default bg-slate-100 text-slate-500'
+                      : highlight
+                      ? 'bg-white text-indigo-600'
+                      : 'bg-[linear-gradient(90deg,#4f75ff,#3b82f6)] text-white'
+                  }`}
+                >
+                  {p.cta}
+                </button>
+              </div>
+            );
+          })}
+        </div>
+
+        <div className="mt-6 rounded-[22px] bg-white/60 p-5 text-center">
+          <CreditCard className="mx-auto h-8 w-8 text-slate-400" />
+          <div className="mt-2 text-[14px] font-semibold text-slate-700">Rozliczenia</div>
+          <div className="mt-1 text-[12px] leading-5 text-slate-500">
+            Po aktywacji Pro lub Business pojawią się tu metoda płatności, następna płatność i historia faktur.
+          </div>
+        </div>
+
+        <div className="mt-4 rounded-[18px] bg-white/60 p-4">
+          <div className="mb-2 text-[13px] font-semibold text-slate-600">Kod promocyjny</div>
+          <div className="flex gap-2">
+            <input
+              value={promo}
+              onChange={(e) => setPromo(e.target.value)}
+              placeholder="np. STUDENT2026"
+              autoCapitalize="characters"
+              autoCorrect="off"
+              spellCheck={false}
+              className="flex-1 rounded-[12px] border border-slate-200 bg-white px-3 py-2 text-[14px] text-slate-700 outline-none focus:border-indigo-300"
+            />
+            <button
+              type="button"
+              onClick={redeemPromo}
+              className="rounded-[12px] bg-slate-100 px-4 py-2 text-[13px] font-semibold text-slate-700"
+            >
+              Zrealizuj
+            </button>
+          </div>
+        </div>
+
+        {hint ? (
+          <div className={`mt-3 rounded-[14px] px-4 py-3 text-[13px] leading-5 ${hintClass}`}>
+            {hint}
+          </div>
+        ) : null}
+      </div>
+    </div>
+  );
+}
+
+type Session = {
+  id: string;
+  device: string;
+  location: string;
+  lastActive: string;
+  current: boolean;
+};
+
+function SecurityScreen({ onBack }: { onBack: () => void }) {
+  const [currentPw, setCurrentPw] = useState('');
+  const [newPw, setNewPw] = useState('');
+  const [confirmPw, setConfirmPw] = useState('');
+  const [hint, setHint] = useState('');
+  const [hintTone, setHintTone] = useState<'info' | 'success' | 'error'>('info');
+
+  function showHint(msg: string, tone: 'info' | 'success' | 'error' = 'info') {
+    setHint(msg);
+    setHintTone(tone);
+  }
+
+  function changePassword() {
+    if (!currentPw || !newPw || !confirmPw) {
+      showHint('Uzupełnij wszystkie pola.', 'error');
+      return;
+    }
+    if (newPw !== confirmPw) {
+      showHint('Nowe hasła nie są zgodne.', 'error');
+      return;
+    }
+    if (newPw.length < 8) {
+      showHint('Nowe hasło musi mieć co najmniej 8 znaków.', 'error');
+      return;
+    }
+    if (newPw === currentPw) {
+      showHint('Nowe hasło musi być inne niż obecne.', 'error');
+      return;
+    }
+    showHint('Wkrótce — zmiana hasła wymaga backendu.', 'info');
+  }
+
+  const sessions: Session[] = [
+    { id: '1', device: 'Chrome • Windows', location: 'Warszawa, PL', lastActive: 'Teraz', current: true },
+    { id: '2', device: 'Safari • iPhone', location: 'Warszawa, PL', lastActive: '2 godziny temu', current: false },
+    { id: '3', device: 'Firefox • Windows', location: 'Kraków, PL', lastActive: '3 dni temu', current: false },
+  ];
+
+  const hintClass =
+    hintTone === 'success'
+      ? 'bg-emerald-50 text-emerald-700'
+      : hintTone === 'error'
+      ? 'bg-rose-50 text-rose-600'
+      : 'bg-white/70 text-slate-600';
+
+  return (
+    <div className="flex h-full flex-col">
+      <SubHeader title="Bezpieczeństwo" onBack={onBack} />
+
+      <div className="min-h-0 flex-1 overflow-y-auto pr-1 pb-6">
+        <h3 className="mb-2 flex items-center gap-2 text-[15px] font-semibold text-slate-700">
+          <Lock className="h-4 w-4 text-slate-500" />
+          Hasło
+        </h3>
+        <div className="space-y-3 rounded-[22px] bg-white/75 p-4 shadow-sm">
+          <FormField
+            label="Obecne hasło"
+            type="password"
+            value={currentPw}
+            onChange={setCurrentPw}
+            placeholder="••••••••"
+            autoComplete="current-password"
+          />
+          <FormField
+            label="Nowe hasło"
+            type="password"
+            value={newPw}
+            onChange={setNewPw}
+            placeholder="minimum 8 znaków"
+            autoComplete="new-password"
+          />
+          <FormField
+            label="Potwierdź nowe hasło"
+            type="password"
+            value={confirmPw}
+            onChange={setConfirmPw}
+            placeholder="powtórz nowe hasło"
+            autoComplete="new-password"
+          />
+          <button
+            type="button"
+            onClick={changePassword}
+            className="w-full rounded-full bg-[linear-gradient(90deg,#4f75ff,#3b82f6)] px-4 py-3 text-[14px] font-semibold text-white"
+          >
+            Zmień hasło
+          </button>
+        </div>
+
+        <h3 className="mt-6 mb-2 flex items-center gap-2 text-[15px] font-semibold text-slate-700">
+          <KeyRound className="h-4 w-4 text-slate-500" />
+          Weryfikacja dwuetapowa
+        </h3>
+        <div className="rounded-[22px] bg-white/75 p-4 shadow-sm">
+          <div className="flex items-center gap-3">
+            <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-amber-100">
+              <KeyRound className="h-5 w-5 text-amber-600" />
+            </div>
+            <div className="min-w-0 flex-1">
+              <div className="text-[15px] font-semibold text-slate-800">2FA — Wyłączone</div>
+              <div className="text-[13px] leading-5 text-slate-500">
+                Kod z aplikacji Authenticator przy logowaniu
+              </div>
+            </div>
+          </div>
+          <button
+            type="button"
+            onClick={() =>
+              showHint('Wkrótce — konfiguracja 2FA (TOTP + kody zapasowe) wymaga backendu.', 'info')
+            }
+            className="mt-3 w-full rounded-full bg-slate-100 px-4 py-3 text-[14px] font-semibold text-slate-700"
+          >
+            Skonfiguruj 2FA
+          </button>
+        </div>
+
+        <h3 className="mt-6 mb-2 flex items-center gap-2 text-[15px] font-semibold text-slate-700">
+          <Smartphone className="h-4 w-4 text-slate-500" />
+          Aktywne sesje
+        </h3>
+        <div className="rounded-[22px] bg-white/75 p-3 shadow-sm">
+          {sessions.map((s, i) => (
+            <div
+              key={s.id}
+              className={`flex items-center gap-3 px-2 py-3 ${
+                i < sessions.length - 1 ? 'border-b border-slate-200' : ''
+              }`}
+            >
+              <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-indigo-100">
+                <Smartphone className="h-5 w-5 text-indigo-500" />
+              </div>
+              <div className="min-w-0 flex-1">
+                <div className="flex items-center gap-2">
+                  <div className="truncate text-[14px] font-semibold text-slate-800">{s.device}</div>
+                  {s.current ? (
+                    <span className="rounded-full bg-emerald-100 px-2 py-0.5 text-[11px] font-semibold text-emerald-700">
+                      to urządzenie
+                    </span>
+                  ) : null}
+                </div>
+                <div className="truncate text-[12px] text-slate-500">
+                  {s.location} • {s.lastActive}
+                </div>
+              </div>
+              {!s.current ? (
+                <button
+                  type="button"
+                  onClick={() =>
+                    showHint('Wkrótce — wylogowanie pojedynczej sesji wymaga backendu.', 'info')
+                  }
+                  className="rounded-full px-3 py-1.5 text-[12px] font-semibold text-rose-600"
+                >
+                  Wyloguj
+                </button>
+              ) : null}
+            </div>
+          ))}
+        </div>
+
+        <button
+          type="button"
+          onClick={() =>
+            showHint('Wkrótce — wylogowanie ze wszystkich urządzeń wymaga backendu z sesjami.', 'info')
+          }
+          className="mt-4 flex w-full items-center justify-center gap-2 rounded-[18px] bg-rose-50 px-4 py-3 text-[14px] font-semibold text-rose-600"
+        >
+          <LogOut className="h-4 w-4" />
+          Wyloguj ze wszystkich urządzeń
+        </button>
+
+        {hint ? (
+          <div className={`mt-3 rounded-[14px] px-4 py-3 text-[13px] leading-5 ${hintClass}`}>
+            {hint}
+          </div>
+        ) : null}
+      </div>
+    </div>
+  );
+}
+
+function collectJarvisData(): Record<string, string> {
+  const out: Record<string, string> = {};
+  try {
+    for (let i = 0; i < localStorage.length; i += 1) {
+      const k = localStorage.key(i);
+      if (k && k.startsWith('jarvis_')) {
+        const v = localStorage.getItem(k);
+        if (v !== null) out[k] = v;
+      }
+    }
+  } catch {}
+  return out;
+}
+
+function getLocalStorageStats(): { count: number; size: number } {
+  let count = 0;
+  let size = 0;
+  try {
+    for (let i = 0; i < localStorage.length; i += 1) {
+      const k = localStorage.key(i);
+      if (k && k.startsWith('jarvis_')) {
+        count += 1;
+        const v = localStorage.getItem(k) || '';
+        size += k.length + v.length;
+      }
+    }
+  } catch {}
+  return { count, size };
+}
+
+function formatBytes(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
+}
+
+function DataScreen({ onBack }: { onBack: () => void }) {
+  const importInputRef = useRef<HTMLInputElement>(null);
+  const [hint, setHint] = useState('');
+  const [hintTone, setHintTone] = useState<'info' | 'success' | 'error'>('info');
+  const [stats, setStats] = useState(() => getLocalStorageStats());
+  const [confirmClear, setConfirmClear] = useState(false);
+  const [consents, setConsents] = useState<Consents>(() => readConsents());
+  const [advancedOpen, setAdvancedOpen] = useState(false);
+
+  function refreshStats() {
+    setStats(getLocalStorageStats());
+  }
+
+  function showHint(message: string, tone: 'info' | 'success' | 'error' = 'info') {
+    setHint(message);
+    setHintTone(tone);
+  }
+
+  function updateConsent<K extends keyof Consents>(key: K, value: Consents[K]) {
+    const next = { ...consents, [key]: value };
+    setConsents(next);
+    writeConsents(next);
+  }
+
+  function requestDataExport() {
+    showHint(
+      'Wkrótce — po dodaniu backendu wyślemy link do pobrania Twoich danych na adres email z profilu.',
+      'info'
+    );
+  }
+
+  function deleteAccount() {
+    showHint('Wkrótce — trwałe usunięcie konta wymaga backendu z logowaniem.', 'info');
+  }
+
+  function exportAll() {
+    const data = collectJarvisData();
+    const count = Object.keys(data).length;
+    if (count === 0) {
+      showHint('Brak danych do eksportu.', 'info');
+      return;
+    }
+    const payload = {
+      version: 1,
+      exported_at: new Date().toISOString(),
+      items: data,
+    };
+    const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    const today = new Date().toISOString().slice(0, 10);
+    a.href = url;
+    a.download = `jarvis-backup-${today}.json`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+    showHint(`Eksport gotowy: ${count} pozycji.`, 'success');
+  }
+
+  function onImportFile(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = () => {
+      try {
+        const parsed = JSON.parse(String(reader.result));
+        const items =
+          parsed && typeof parsed === 'object' && parsed.items && typeof parsed.items === 'object'
+            ? parsed.items
+            : parsed;
+        if (!items || typeof items !== 'object') throw new Error('Nieprawidłowy plik kopii zapasowej');
+        const keys = Object.keys(items).filter((k) => k.startsWith('jarvis_'));
+        if (keys.length === 0) throw new Error('Plik nie zawiera żadnych danych Jarvisa');
+        keys.forEach((k) => {
+          const v = items[k];
+          localStorage.setItem(k, typeof v === 'string' ? v : JSON.stringify(v));
+        });
+        refreshStats();
+        showHint(`Zaimportowano ${keys.length} pozycji. Odśwież aplikację, żeby zobaczyć zmiany.`, 'success');
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : 'nieznany błąd';
+        showHint(`Błąd importu: ${msg}`, 'error');
+      }
+    };
+    reader.onerror = () => showHint('Nie udało się odczytać pliku.', 'error');
+    reader.readAsText(file);
+    if (importInputRef.current) importInputRef.current.value = '';
+  }
+
+  function clearLocal() {
+    if (!confirmClear) {
+      setConfirmClear(true);
+      showHint('Kliknij jeszcze raz, żeby potwierdzić usunięcie lokalnych danych.', 'info');
+      window.setTimeout(() => setConfirmClear(false), 4000);
+      return;
+    }
+    const keys: string[] = [];
+    try {
+      for (let i = 0; i < localStorage.length; i += 1) {
+        const k = localStorage.key(i);
+        if (k && k.startsWith('jarvis_')) keys.push(k);
+      }
+      keys.forEach((k) => localStorage.removeItem(k));
+    } catch {}
+    setConfirmClear(false);
+    refreshStats();
+    showHint(`Usunięto ${keys.length} pozycji. Odśwież aplikację.`, 'success');
+  }
+
+  const hintClass =
+    hintTone === 'success'
+      ? 'bg-emerald-50 text-emerald-700'
+      : hintTone === 'error'
+      ? 'bg-rose-50 text-rose-600'
+      : 'bg-white/70 text-slate-600';
+
+  return (
+    <div className="flex h-full flex-col">
+      <SubHeader title="Dane i prywatność" onBack={onBack} />
+
+      <div className="min-h-0 flex-1 overflow-y-auto pr-1 pb-6">
+        <h3 className="mb-2 text-[15px] font-semibold text-slate-700">Zgody</h3>
+        <div className="rounded-[22px] bg-white/75 p-3 shadow-sm">
+          <ToggleRow
+            icon={<Mail className="h-7 w-7 text-indigo-300" />}
+            title="Newsletter i marketing"
+            checked={consents.marketing}
+            onChange={(v) => updateConsent('marketing', v)}
+          />
+          <div className="border-b border-slate-200" />
+          <ToggleRow
+            icon={<BarChart3 className="h-7 w-7 text-indigo-300" />}
+            title="Analityka użycia"
+            checked={consents.analytics}
+            onChange={(v) => updateConsent('analytics', v)}
+          />
+          <div className="border-b border-slate-200" />
+          <ToggleRow
+            icon={<Lightbulb className="h-7 w-7 text-indigo-300" />}
+            title="Personalizacja treści"
+            checked={consents.personalization}
+            onChange={(v) => updateConsent('personalization', v)}
+          />
+        </div>
+        <div className="mt-2 px-2 text-[12px] leading-5 text-slate-500">
+          Zgody możesz wycofać w każdej chwili. Szczegóły w Polityce prywatności.
+        </div>
+
+        <h3 className="mt-6 mb-2 text-[15px] font-semibold text-slate-700">Twoje dane</h3>
+        <div className="space-y-2">
+          <button
+            type="button"
+            onClick={requestDataExport}
+            className="flex w-full items-center gap-3 rounded-[18px] bg-white/75 px-4 py-4 text-left shadow-sm"
+          >
+            <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-indigo-100">
+              <Download className="h-5 w-5 text-indigo-500" />
+            </div>
+            <div className="min-w-0 flex-1">
+              <div className="text-[16px] font-semibold text-slate-800">Pobierz moje dane</div>
+              <div className="text-[13px] leading-5 text-slate-500">
+                Wyślemy link z archiwum na email z profilu (RODO)
+              </div>
+            </div>
+            <ChevronRight className="h-5 w-5 shrink-0 text-slate-400" />
+          </button>
+
+          <button
+            type="button"
+            onClick={deleteAccount}
+            className="flex w-full items-center gap-3 rounded-[18px] bg-white/75 px-4 py-4 text-left shadow-sm"
+          >
+            <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-rose-100">
+              <Trash2 className="h-5 w-5 text-rose-500" />
+            </div>
+            <div className="min-w-0 flex-1">
+              <div className="text-[16px] font-semibold text-rose-600">Usuń konto</div>
+              <div className="text-[13px] leading-5 text-slate-500">
+                Trwale usuwa Twoje konto i wszystkie dane z serwera
+              </div>
+            </div>
+            <ChevronRight className="h-5 w-5 shrink-0 text-slate-400" />
+          </button>
+        </div>
+
+        {hint ? (
+          <div className={`mt-3 rounded-[14px] px-4 py-3 text-[13px] leading-5 ${hintClass}`}>
+            {hint}
+          </div>
+        ) : null}
+
+        <div className="mt-8">
+          <button
+            type="button"
+            onClick={() => setAdvancedOpen((v) => !v)}
+            className="flex w-full items-center justify-between gap-3 rounded-[18px] bg-white/60 px-4 py-3 text-left"
+          >
+            <span className="text-[14px] font-semibold text-slate-600">Zaawansowane</span>
+            {advancedOpen ? (
+              <ChevronUp className="h-5 w-5 text-slate-500" />
+            ) : (
+              <ChevronDown className="h-5 w-5 text-slate-500" />
+            )}
+          </button>
+
+          {advancedOpen ? (
+            <div className="mt-3 space-y-3">
+              <div className="rounded-[18px] bg-white/60 p-4">
+                <div className="text-[12px] font-medium text-slate-500">Lokalne dane w przeglądarce</div>
+                <div className="mt-1 text-[18px] font-semibold text-slate-800">
+                  {stats.count} {stats.count === 1 ? 'pozycja' : 'pozycji'} • {formatBytes(stats.size)}
+                </div>
+                <div className="mt-1 text-[12px] leading-5 text-slate-500">
+                  Narzędzia deweloperskie — kopie zapasowe `localStorage`. W docelowej wersji cloud użytkownik korzysta z „Pobierz moje dane" powyżej.
+                </div>
+              </div>
+
+              <button
+                type="button"
+                onClick={exportAll}
+                className="flex w-full items-center gap-3 rounded-[14px] bg-white/60 px-4 py-3 text-left"
+              >
+                <Download className="h-4 w-4 text-slate-500" />
+                <span className="text-[14px] text-slate-700">Eksportuj lokalne dane do pliku JSON</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => importInputRef.current?.click()}
+                className="flex w-full items-center gap-3 rounded-[14px] bg-white/60 px-4 py-3 text-left"
+              >
+                <Upload className="h-4 w-4 text-slate-500" />
+                <span className="text-[14px] text-slate-700">Importuj lokalne dane z pliku JSON</span>
+              </button>
+
+              <input
+                ref={importInputRef}
+                type="file"
+                accept="application/json,.json"
+                onChange={onImportFile}
+                className="hidden"
+              />
+
+              <div className="rounded-[14px] bg-rose-50/60 p-3">
+                <div className="mb-2 flex items-center gap-2 text-[12px] font-semibold text-rose-700">
+                  <AlertTriangle className="h-4 w-4" />
+                  Strefa destrukcyjna
+                </div>
+                <button
+                  type="button"
+                  onClick={clearLocal}
+                  className={`flex w-full items-center justify-center gap-2 rounded-[12px] px-3 py-2 text-[13px] font-semibold transition-colors ${
+                    confirmClear
+                      ? 'bg-rose-600 text-white'
+                      : 'border border-rose-200 bg-white text-rose-600'
+                  }`}
+                >
+                  <Trash2 className="h-4 w-4" />
+                  {confirmClear ? 'Kliknij ponownie, żeby potwierdzić' : 'Wyczyść lokalne dane'}
+                </button>
+              </div>
+            </div>
+          ) : null}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function SettingsScreen({
+  path,
+  setPath,
+}: {
+  path: SettingsPath;
+  setPath: (p: SettingsPath) => void;
+}) {
+  const [ollamaUrl, setOllamaUrl] = useState(() => readOllamaUrl());
+  const [ollamaModel, setOllamaModel] = useState(() => readOllamaModel());
+  const [status, setStatus] = useState('Nie sprawdzono połączenia.');
+  const [testing, setTesting] = useState(false);
+  const [permStatus, setPermStatus] = useState<string>('');
+
+  const [notif, setNotif] = useState(() => {
+    if (typeof Notification !== 'undefined' && Notification.permission === 'granted') return true;
+    try {
+      return localStorage.getItem(PERM_NOTIFICATIONS_KEY) === '1';
+    } catch {
+      return false;
+    }
+  });
+  const [mic, setMic] = useState(() => {
+    try {
+      return localStorage.getItem(PERM_MIC_KEY) === '1';
+    } catch {
+      return false;
+    }
+  });
+  const [loc, setLoc] = useState(() => {
+    try {
+      return localStorage.getItem(PERM_LOCATION_KEY) === '1';
+    } catch {
+      return false;
+    }
+  });
+
+  function saveOllama() {
+    const url = cleanUrl(ollamaUrl);
+    const model = ollamaModel.trim() || DEFAULT_OLLAMA_MODEL;
+    try {
+      localStorage.setItem(OLLAMA_URL_KEY, url);
+      localStorage.setItem(OLLAMA_MODEL_KEY, model);
+    } catch {}
+    setOllamaUrl(url);
+    setOllamaModel(model);
+    setStatus('Zapisano.');
+  }
+
+  async function testConnection() {
+    const url = cleanUrl(ollamaUrl);
+    if (!url) {
+      setStatus('Podaj adres Ollamy.');
+      return;
+    }
+    setTesting(true);
+    setStatus('Sprawdzam połączenie...');
+    try {
+      try {
+        localStorage.setItem(OLLAMA_URL_KEY, url);
+      } catch {}
+      setOllamaUrl(url);
+      const res = await fetch(`${url}/api/tags`, { headers: { Accept: 'application/json' } });
+      if (!res.ok) {
+        setStatus(`Błąd połączenia: HTTP ${res.status}`);
+        return;
+      }
+      const data = await res.json();
+      const models = Array.isArray(data?.models) ? data.models : [];
+      const first = models[0]?.name || models[0]?.model || null;
+      setStatus(first ? `Połączenie OK. Wykryty model: ${first}` : 'Połączenie OK. Ollama odpowiada.');
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : 'nieznany błąd';
+      setStatus(`Brak połączenia: ${msg}`);
+    } finally {
+      setTesting(false);
+    }
+  }
+
+  function isInsecureLan() {
+    if (typeof window === 'undefined') return false;
+    if (window.isSecureContext) return false;
+    const h = window.location.hostname;
+    return h !== 'localhost' && h !== '127.0.0.1' && h !== '::1';
+  }
+
+  async function toggleNotifications(next: boolean) {
+    if (!next) {
+      setNotif(false);
+      setPermStatus('Powiadomienia wyłączone.');
+      try {
+        localStorage.setItem(PERM_NOTIFICATIONS_KEY, '0');
+      } catch {}
+      return;
+    }
+    if (typeof Notification === 'undefined') {
+      setPermStatus('Powiadomienia nie są wspierane w tej przeglądarce.');
+      return;
+    }
+    if (isInsecureLan()) {
+      setPermStatus(
+        'Powiadomienia wymagają HTTPS lub localhost. Na telefonie przez Wi-Fi nie zadziałają — zadziała po spakowaniu w Capacitor.'
+      );
+      return;
+    }
+    if (Notification.permission === 'denied') {
+      setPermStatus(
+        'Powiadomienia są zablokowane w ustawieniach przeglądarki dla tej strony. Odblokuj je w pasku adresu (ikona kłódki → Powiadomienia → Zezwól) i spróbuj ponownie.'
+      );
+      return;
+    }
+    try {
+      const perm = await Notification.requestPermission();
+      const granted = perm === 'granted';
+      setNotif(granted);
+      setPermStatus(
+        granted
+          ? 'Powiadomienia włączone.'
+          : perm === 'denied'
+          ? 'Odmówiono zgody. Odblokuj w ustawieniach strony w przeglądarce.'
+          : 'Zgoda nie została przyznana.'
+      );
+      try {
+        localStorage.setItem(PERM_NOTIFICATIONS_KEY, granted ? '1' : '0');
+      } catch {}
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : 'nieznany błąd';
+      setPermStatus(`Błąd powiadomień: ${msg}`);
+    }
+  }
+
+  async function toggleMic(next: boolean) {
+    if (!next) {
+      setMic(false);
+      setPermStatus('Mikrofon wyłączony.');
+      try {
+        localStorage.setItem(PERM_MIC_KEY, '0');
+      } catch {}
+      return;
+    }
+    if (isInsecureLan()) {
+      setPermStatus('Mikrofon wymaga HTTPS lub localhost.');
+      return;
+    }
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      stream.getTracks().forEach((t) => t.stop());
+      setMic(true);
+      setPermStatus('Mikrofon włączony.');
+      try {
+        localStorage.setItem(PERM_MIC_KEY, '1');
+      } catch {}
+    } catch (e) {
+      setMic(false);
+      const msg = e instanceof Error ? e.message : 'odmowa';
+      setPermStatus(`Odmowa dostępu do mikrofonu: ${msg}`);
+      try {
+        localStorage.setItem(PERM_MIC_KEY, '0');
+      } catch {}
+    }
+  }
+
+  function toggleLocation(next: boolean) {
+    if (!next) {
+      setLoc(false);
+      setPermStatus('Lokalizacja wyłączona.');
+      try {
+        localStorage.setItem(PERM_LOCATION_KEY, '0');
+      } catch {}
+      return;
+    }
+    if (!('geolocation' in navigator)) {
+      setPermStatus('Lokalizacja nie jest wspierana w tej przeglądarce.');
+      return;
+    }
+    if (isInsecureLan()) {
+      setPermStatus('Lokalizacja wymaga HTTPS lub localhost.');
+      return;
+    }
+    navigator.geolocation.getCurrentPosition(
+      () => {
+        setLoc(true);
+        setPermStatus('Lokalizacja włączona.');
+        try {
+          localStorage.setItem(PERM_LOCATION_KEY, '1');
+        } catch {}
+      },
+      (err) => {
+        setLoc(false);
+        setPermStatus(`Odmowa dostępu do lokalizacji: ${err.message}`);
+        try {
+          localStorage.setItem(PERM_LOCATION_KEY, '0');
+        } catch {}
+      }
+    );
+  }
+
+  if (path === 'account') {
+    return <AccountScreen onBack={() => setPath('root')} onNavigate={setPath} />;
+  }
+  if (path === 'profile') {
+    return <ProfileScreen onBack={() => setPath('account')} />;
+  }
+  if (path === 'security') {
+    return <SecurityScreen onBack={() => setPath('account')} />;
+  }
+  if (path === 'plan') {
+    return <BillingScreen onBack={() => setPath('account')} />;
+  }
+  if (path === 'integrations') {
+    return <IntegrationsScreen onBack={() => setPath('account')} />;
+  }
+  if (path === 'data') {
+    return <DataScreen onBack={() => setPath('account')} />;
+  }
+
   return (
     <div className="flex h-full flex-col">
       <Header title="Ustawienia" subtitle={copy.version} icon={<Cog className="h-10 w-10 text-indigo-300" />} />
-      <SearchBar />
 
       <div className="min-h-0 flex-1 overflow-y-auto pr-1 pb-6">
         <div className="space-y-5">
@@ -1957,34 +3679,75 @@ function SettingsScreen() {
             <h3 className="mb-3 text-[20px] font-semibold text-slate-800">Konto</h3>
 
             <div className="rounded-[22px] bg-white/75 p-3 shadow-sm">
-              {[
-                { icon: <UserCircle2 className="h-8 w-8 text-indigo-300" />, title: 'Moje konto' },
-                { icon: <SlidersHorizontal className="h-8 w-8 text-indigo-300" />, title: 'Preferencje' },
-              ].map((item) => (
-                <div key={item.title} className="flex items-center justify-between border-b border-slate-200 px-3 py-4 last:border-b-0">
-                  <div className="flex items-center gap-4">
-                    {item.icon}
-                    <span className="text-[18px] text-slate-700">{item.title}</span>
-                  </div>
-                  <ChevronRight className="h-7 w-7 text-indigo-300" />
+              <button
+                type="button"
+                onClick={() => setPath('account')}
+                className="flex w-full items-center justify-between gap-3 px-3 py-4 text-left"
+              >
+                <div className="flex items-center gap-4">
+                  <UserCircle2 className="h-8 w-8 text-indigo-300" />
+                  <span className="text-[18px] text-slate-700">Moje konto</span>
                 </div>
-              ))}
+                <ChevronRight className="h-7 w-7 text-indigo-300" />
+              </button>
             </div>
 
             <div className="mt-4 rounded-[22px] bg-white/75 p-5 shadow-sm">
-              <div className="flex items-start justify-between gap-4">
-                <div className="flex gap-4">
-                  <div className="flex h-20 w-20 items-center justify-center rounded-[18px] bg-indigo-100 text-[34px]">
-                    🦙
-                  </div>
-                  <div>
-                    <div className="text-[18px] font-semibold text-slate-800">Ollama</div>
-                    <div className="mt-2 max-w-[250px] text-[16px] leading-7 text-slate-500">
-                      Aktywny model: {OLLAMA_MODEL}
-                    </div>
-                  </div>
+              <div className="flex items-start gap-4">
+                <div
+                  className="flex h-20 w-20 shrink-0 items-center justify-center rounded-[18px]"
+                  style={{ backgroundColor: '#11111115' }}
+                >
+                  <SiOllama size={40} color="#111111" />
                 </div>
-                <ChevronRight className="h-7 w-7 shrink-0 text-indigo-300" />
+                <div className="min-w-0 flex-1">
+                  <div className="text-[18px] font-semibold text-slate-800">Ollama</div>
+                  <div className="mt-1 text-[14px] leading-5 text-slate-500">{status}</div>
+                </div>
+              </div>
+
+              <div className="mt-4 space-y-3">
+                <div>
+                  <label className="mb-1 block text-[13px] font-medium text-slate-500">Adres Ollamy</label>
+                  <input
+                    value={ollamaUrl}
+                    onChange={(e) => setOllamaUrl(e.target.value)}
+                    placeholder={DEFAULT_OLLAMA_URL}
+                    className="w-full rounded-[14px] border border-slate-200 bg-white px-3 py-2 text-[15px] text-slate-700 outline-none focus:border-indigo-300"
+                    autoCapitalize="off"
+                    autoCorrect="off"
+                    spellCheck={false}
+                  />
+                </div>
+                <div>
+                  <label className="mb-1 block text-[13px] font-medium text-slate-500">Model</label>
+                  <input
+                    value={ollamaModel}
+                    onChange={(e) => setOllamaModel(e.target.value)}
+                    placeholder={DEFAULT_OLLAMA_MODEL}
+                    className="w-full rounded-[14px] border border-slate-200 bg-white px-3 py-2 text-[15px] text-slate-700 outline-none focus:border-indigo-300"
+                    autoCapitalize="off"
+                    autoCorrect="off"
+                    spellCheck={false}
+                  />
+                </div>
+                <div className="flex gap-2">
+                  <button
+                    type="button"
+                    onClick={saveOllama}
+                    className="flex-1 rounded-full bg-slate-100 px-4 py-2.5 text-[14px] font-semibold text-slate-700"
+                  >
+                    Zapisz
+                  </button>
+                  <button
+                    type="button"
+                    onClick={testConnection}
+                    disabled={testing}
+                    className="flex-1 rounded-full bg-[linear-gradient(90deg,#4f75ff,#3b82f6)] px-4 py-2.5 text-[14px] font-semibold text-white disabled:opacity-60"
+                  >
+                    {testing ? 'Sprawdzam...' : 'Sprawdź połączenie'}
+                  </button>
+                </div>
               </div>
             </div>
           </div>
@@ -1993,12 +3756,33 @@ function SettingsScreen() {
             <h3 className="mb-3 text-[20px] font-semibold text-slate-800">Pozwolenia</h3>
 
             <div className="rounded-[22px] bg-white/75 p-3 shadow-sm">
-              <ToggleRow icon={<Bell className="h-7 w-7 text-indigo-300" />} title="Powiadomienia" />
+              <ToggleRow
+                icon={<Bell className="h-7 w-7 text-indigo-300" />}
+                title="Powiadomienia"
+                checked={notif}
+                onChange={toggleNotifications}
+              />
               <div className="border-b border-slate-200" />
-              <ToggleRow icon={<Mic className="h-7 w-7 text-indigo-300" />} title="Dostęp do mikrofonu" />
+              <ToggleRow
+                icon={<Mic className="h-7 w-7 text-indigo-300" />}
+                title="Dostęp do mikrofonu"
+                checked={mic}
+                onChange={toggleMic}
+              />
               <div className="border-b border-slate-200" />
-              <ToggleRow icon={<MapPin className="h-7 w-7 text-indigo-300" />} title="Dostęp do lokalizacji" />
+              <ToggleRow
+                icon={<MapPin className="h-7 w-7 text-indigo-300" />}
+                title="Dostęp do lokalizacji"
+                checked={loc}
+                onChange={toggleLocation}
+              />
             </div>
+
+            {permStatus ? (
+              <div className="mt-3 rounded-[14px] bg-white/60 px-4 py-3 text-[13px] leading-5 text-slate-600">
+                {permStatus}
+              </div>
+            ) : null}
           </div>
 
           <div className="h-12 rounded-[22px] bg-white/40" />
@@ -2222,48 +4006,127 @@ export default function App() {
     });
   }
 
+  const [settingsPath, setSettingsPath] = useState<SettingsPath>('root');
+  const [showNotifications, setShowNotifications] = useState(false);
+  const [readIds, setReadIds] = useState<string[]>(() => readIdList(NOTIFICATIONS_READ_KEY));
+  const [dismissedIds, setDismissedIds] = useState<string[]>(() =>
+    readIdList(NOTIFICATIONS_DISMISSED_KEY)
+  );
+
+  const visibleNotifications = useMemo(
+    () => MOCK_NOTIFICATIONS.filter((n) => !dismissedIds.includes(n.id)),
+    [dismissedIds]
+  );
+
+  const unreadCount = useMemo(
+    () => visibleNotifications.filter((n) => !readIds.includes(n.id)).length,
+    [visibleNotifications, readIds]
+  );
+
+  function markAsRead(id: string) {
+    setReadIds((prev) => {
+      if (prev.includes(id)) return prev;
+      const next = [...prev, id];
+      writeIdList(NOTIFICATIONS_READ_KEY, next);
+      return next;
+    });
+  }
+
+  function markAllRead() {
+    const allIds = MOCK_NOTIFICATIONS.map((n) => n.id);
+    setReadIds(allIds);
+    writeIdList(NOTIFICATIONS_READ_KEY, allIds);
+  }
+
+  function dismissNotification(id: string) {
+    setDismissedIds((prev) => {
+      if (prev.includes(id)) return prev;
+      const next = [...prev, id];
+      writeIdList(NOTIFICATIONS_DISMISSED_KEY, next);
+      return next;
+    });
+  }
+
+  function clearAllNotifications() {
+    const allIds = MOCK_NOTIFICATIONS.map((n) => n.id);
+    setDismissedIds(allIds);
+    writeIdList(NOTIFICATIONS_DISMISSED_KEY, allIds);
+  }
+
+  function goToTab(tab: TabId) {
+    setActiveTab(tab);
+    if (tab === 'settings') setSettingsPath('root');
+    setShowNotifications(false);
+  }
+
+  const navValue: NavContextType = {
+    goToAccount: () => {
+      setActiveTab('settings');
+      setSettingsPath('account');
+      setShowNotifications(false);
+    },
+    openNotifications: () => setShowNotifications(true),
+    unreadCount,
+  };
+
   let screen: React.ReactNode;
 
-  switch (activeTab) {
-    case 'chat':
-      screen = (
-        <ChatScreen
-          onShoppingDetected={handleShoppingDetected}
-          onProjectDetected={handleProjectDetected}
-          chatMessages={chatMessages}
-          setChatMessages={setChatMessages}
-        />
-      );
-      break;
-    case 'plan':
-      screen = <PlanScreen />;
-      break;
-    case 'calendar':
-      screen = (
-        <CalendarScreen
-          shoppingPool={shoppingPool}
-          setShoppingPool={setShoppingPool}
-          events={events}
-          setEvents={setEvents}
-        />
-      );
-      break;
-    case 'projects':
-      screen = <ProjectsScreen projectItems={projectItems} setProjectItems={setProjectItems} />;
-      break;
-    case 'settings':
-      screen = <SettingsScreen />;
-      break;
-    case 'home':
-    default:
-      screen = <HomeScreen setActiveTab={setActiveTab} />;
-      break;
+  if (showNotifications) {
+    screen = (
+      <NotificationsScreen
+        notifications={visibleNotifications}
+        readIds={readIds}
+        onMarkAsRead={markAsRead}
+        onMarkAllRead={markAllRead}
+        onDismiss={dismissNotification}
+        onClearAll={clearAllNotifications}
+        onClose={() => setShowNotifications(false)}
+      />
+    );
+  } else {
+    switch (activeTab) {
+      case 'chat':
+        screen = (
+          <ChatScreen
+            onShoppingDetected={handleShoppingDetected}
+            onProjectDetected={handleProjectDetected}
+            chatMessages={chatMessages}
+            setChatMessages={setChatMessages}
+          />
+        );
+        break;
+      case 'plan':
+        screen = <PlanScreen />;
+        break;
+      case 'calendar':
+        screen = (
+          <CalendarScreen
+            shoppingPool={shoppingPool}
+            setShoppingPool={setShoppingPool}
+            events={events}
+            setEvents={setEvents}
+          />
+        );
+        break;
+      case 'projects':
+        screen = <ProjectsScreen projectItems={projectItems} setProjectItems={setProjectItems} />;
+        break;
+      case 'settings':
+        screen = <SettingsScreen path={settingsPath} setPath={setSettingsPath} />;
+        break;
+      case 'home':
+      default:
+        screen = <HomeScreen setActiveTab={setActiveTab} />;
+        break;
+    }
   }
 
   return (
-    <PhoneShell activeTab={activeTab} setActiveTab={setActiveTab}>
-      {screen}
-    </PhoneShell>
+    <NavContext.Provider value={navValue}>
+      <PhoneShell activeTab={activeTab} setActiveTab={goToTab}>
+        {screen}
+      </PhoneShell>
+    </NavContext.Provider>
   );
 }
 
