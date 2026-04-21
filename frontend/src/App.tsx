@@ -45,6 +45,11 @@ import {
   Lock,
   KeyRound,
   Smartphone,
+  Sun,
+  ListTodo,
+  CalendarRange,
+  FolderKanban,
+  Clock,
 } from 'lucide-react';
 import type { IconType } from 'react-icons';
 import {
@@ -80,12 +85,21 @@ type ShoppingPoolItem = {
 
 type ProjectCategory = 'shopping' | 'reading' | 'ideas' | 'to_check' | 'general';
 
+type ChecklistItem = {
+  id: string;
+  label: string;
+  done: boolean;
+};
+
 type ProjectItem = {
   id: string;
   label: string;
   category: ProjectCategory;
   done: boolean;
   source: 'chat' | 'manual' | 'calendar';
+  dueAt: string | null;
+  time: string | null;
+  checklist: ChecklistItem[];
 };
 
 type CalendarEvent = {
@@ -315,6 +329,8 @@ type NavContextType = {
 
 const NavContext = createContext<NavContextType | null>(null);
 
+type HomeDetailView = null | 'inbox-tasks' | 'seven-days';
+
 const STORAGE_KEY = 'jarvis_calendar_v6_state';
 
 const WEEKDAYS_SHORT = ['Pon', 'Wt', 'Śr', 'Czw', 'Pt', 'Sob', 'Ndz'];
@@ -359,6 +375,77 @@ function addDays(date: Date, days: number) {
   const next = new Date(date);
   next.setDate(next.getDate() + days);
   return next;
+}
+
+function todayKey(): string {
+  return toDateKey(new Date());
+}
+
+function tomorrowKey(): string {
+  const d = new Date();
+  d.setDate(d.getDate() + 1);
+  return toDateKey(d);
+}
+
+function endOfWeekKey(): string {
+  const d = new Date();
+  const day = d.getDay();
+  const offsetToSunday = day === 0 ? 0 : 7 - day;
+  d.setDate(d.getDate() + offsetToSunday);
+  return toDateKey(d);
+}
+
+function isInNext7Days(key: string): boolean {
+  const t = new Date();
+  t.setHours(0, 0, 0, 0);
+  const limit = new Date(t);
+  limit.setDate(t.getDate() + 7);
+  const [y, m, day] = key.split('-').map(Number);
+  if (!y || !m || !day) return false;
+  const target = new Date(y, m - 1, day);
+  return target >= t && target < limit;
+}
+
+function formatDueLabel(key: string | null): string {
+  if (!key) return 'Bez daty';
+  if (key === todayKey()) return 'Dziś';
+  if (key === tomorrowKey()) return 'Jutro';
+  const [, m, d] = key.split('-').map(Number);
+  return `${d} ${MONTHS_PL[m - 1].toLowerCase()}`;
+}
+
+function formatDueWithTime(date: string | null, time: string | null): string {
+  if (!date && !time) return '';
+  if (!date) return time ?? '';
+  if (!time) return formatDueLabel(date);
+  return `${formatDueLabel(date)}, ${time}`;
+}
+
+function pluralPL(n: number, forms: [string, string, string]): string {
+  const abs = Math.abs(n);
+  const mod10 = abs % 10;
+  const mod100 = abs % 100;
+  if (abs === 1) return forms[0];
+  if (mod10 >= 2 && mod10 <= 4 && (mod100 < 12 || mod100 > 14)) return forms[1];
+  return forms[2];
+}
+
+function nowHHMM(now: Date): string {
+  return `${pad2(now.getHours())}:${pad2(now.getMinutes())}`;
+}
+
+function timeUntilLabel(eventTime: string, now: Date): string {
+  const [h, m] = eventTime.split(':').map(Number);
+  if (Number.isNaN(h) || Number.isNaN(m)) return '';
+  const target = new Date(now);
+  target.setHours(h, m, 0, 0);
+  const diffMin = Math.round((target.getTime() - now.getTime()) / 60000);
+  if (diffMin <= 0) return 'teraz';
+  if (diffMin < 60) return `${diffMin} min`;
+  const hrs = Math.floor(diffMin / 60);
+  const mins = diffMin % 60;
+  if (mins === 0) return `${hrs} h`;
+  return `${hrs} h ${mins} min`;
 }
 
 function formatMonthYear(date: Date) {
@@ -552,7 +639,7 @@ function Header({
         {extraLeft}
         {icon ? <div className="pt-1">{icon}</div> : null}
         <div className="min-w-0">
-          <h1 className="text-[34px] font-semibold leading-none tracking-[-0.05em] text-slate-800">
+          <h1 className="text-[34px] font-semibold leading-none text-slate-800">
             {title}
           </h1>
           <div className="mt-3 flex flex-wrap items-center gap-3">
@@ -651,10 +738,10 @@ function DashboardCard({
         <ChevronRight className="h-5 w-5 shrink-0 text-slate-400" />
       </div>
 
-      <div className="text-[26px] font-semibold leading-none tracking-[-0.05em] text-slate-800">
+      <div className="text-center text-[26px] font-semibold leading-none text-slate-800">
         {value}
       </div>
-      <div className="mt-2 text-[12px] text-slate-500">{subtitle}</div>
+      <div className="mt-2 text-center text-[12px] text-slate-500">{subtitle}</div>
     </button>
   );
 }
@@ -741,9 +828,133 @@ function PhoneShell({
   );
 }
 
-function HomeScreen({ setActiveTab }: { setActiveTab: (tab: TabId) => void }) {
+function HomeScreen({
+  setActiveTab,
+  projectItems,
+  events,
+  onOpenInbox,
+  onOpenWeek,
+}: {
+  setActiveTab: (tab: TabId) => void;
+  projectItems: ProjectItem[];
+  events: CalendarEvent[];
+  onOpenInbox: () => void;
+  onOpenWeek: () => void;
+}) {
   const profile = readProfile();
   const firstName = profile.firstName.trim() || DEFAULT_PROFILE.firstName;
+
+  const [now, setNow] = useState<Date>(() => new Date());
+  useEffect(() => {
+    const id = window.setInterval(() => setNow(new Date()), 60_000);
+    return () => window.clearInterval(id);
+  }, []);
+
+  const today = todayKey();
+  const inboxCount = projectItems.filter(
+    (i) => !i.done && (!i.dueAt || i.dueAt === today)
+  ).length;
+
+  const weekEventsCount = events.filter((e) => isInNext7Days(e.date)).length;
+  const weekTasksCount = projectItems.filter(
+    (i) => !i.done && i.dueAt && isInNext7Days(i.dueAt)
+  ).length;
+  const weekCount = weekEventsCount + weekTasksCount;
+
+  const projectsCount = projectItems.filter((i) => !i.done).length;
+
+  const todayTasksCount = projectItems.filter(
+    (i) => !i.done && i.dueAt === today
+  ).length;
+  const todayEventsSorted = events
+    .filter((e) => e.date === today)
+    .slice()
+    .sort((a, b) => (a.time || '').localeCompare(b.time || ''));
+  const todayEventsCount = todayEventsSorted.length;
+
+  const nowTime = nowHHMM(now);
+
+  type UpcomingItem = {
+    id: string;
+    kind: 'event' | 'task';
+    time: string;
+    title: string;
+    note: string | null;
+    dotClass: string;
+    badge: string;
+    badgeClass: string;
+  };
+
+  const upcomingEventItems: UpcomingItem[] = todayEventsSorted
+    .filter((e) => e.time && e.time >= nowTime)
+    .map((e) => ({
+      id: e.id,
+      kind: 'event',
+      time: e.time,
+      title: e.title,
+      note: e.note ?? null,
+      dotClass: e.dotClass,
+      badge: e.badge,
+      badgeClass: e.badgeClass,
+    }));
+
+  const upcomingTaskItems: UpcomingItem[] = projectItems
+    .filter((i) => !i.done && i.dueAt === today && i.time && i.time >= nowTime)
+    .map((i) => ({
+      id: i.id,
+      kind: 'task',
+      time: i.time as string,
+      title: i.label,
+      note: null,
+      dotClass: 'bg-indigo-400',
+      badge: 'Zadanie',
+      badgeClass: 'bg-indigo-100 text-indigo-500',
+    }));
+
+  const upcomingToday = [...upcomingEventItems, ...upcomingTaskItems]
+    .sort((a, b) => a.time.localeCompare(b.time))
+    .slice(0, 2);
+  const nextItem = upcomingToday[0] ?? null;
+
+  const nextEventTime =
+    [
+      ...todayEventsSorted.filter((e) => e.time).map((e) => e.time),
+      ...projectItems
+        .filter((i) => !i.done && i.dueAt === today && i.time)
+        .map((i) => i.time as string),
+    ].sort()[0] ?? null;
+
+  function renderTodayMessage(): React.ReactNode {
+    if (todayTasksCount === 0 && todayEventsCount === 0) {
+      return 'Dziś nic nie zaplanowane.';
+    }
+    const parts: React.ReactNode[] = ['Masz dziś '];
+    if (todayTasksCount > 0) {
+      parts.push(
+        <span key="t" className="font-semibold text-slate-800">
+          {todayTasksCount} {pluralPL(todayTasksCount, ['zadanie', 'zadania', 'zadań'])}
+        </span>
+      );
+    }
+    if (todayTasksCount > 0 && todayEventsCount > 0) parts.push(' i ');
+    if (todayEventsCount > 0) {
+      parts.push(
+        <span key="e" className="font-semibold text-slate-800">
+          {todayEventsCount} {pluralPL(todayEventsCount, ['spotkanie', 'spotkania', 'spotkań'])}
+        </span>
+      );
+    }
+    if (nextEventTime) {
+      parts.push(todayEventsCount === 1 ? ' o ' : ' — najbliższe o ');
+      parts.push(
+        <span key="time" className="font-semibold text-slate-800">
+          {nextEventTime}
+        </span>
+      );
+    }
+    parts.push('.');
+    return <>{parts}</>;
+  }
 
   return (
     <div className="flex h-full flex-col">
@@ -759,17 +970,12 @@ function HomeScreen({ setActiveTab }: { setActiveTab: (tab: TabId) => void }) {
             />
           </div>
 
-          <div className="min-w-0 flex-1 pr-1">
-            <h2 className="text-[24px] font-semibold leading-tight tracking-[-0.05em] text-slate-800">
-              Witaj {firstName}! {copy.wave}
+          <div className="min-w-0 flex-1 pr-1 text-center">
+            <h2 className="text-[24px] font-semibold leading-tight text-slate-800">
+              Witaj {firstName}
             </h2>
-            <p className="mt-1 text-[14px] leading-5 text-slate-600">
-              {copy.todayLine1}
-              <span className="font-semibold text-slate-800">{copy.tasks10}</span>
-              {copy.todayLine2}
-              <span className="font-semibold text-slate-800">{copy.meeting1}</span>
-              {copy.todayLine3}
-              <span className="font-semibold text-slate-800">{copy.todayLine4}</span>.
+            <p className="mt-2 text-[16px] font-medium leading-6 text-slate-700">
+              {renderTodayMessage()}
             </p>
           </div>
         </div>
@@ -777,33 +983,25 @@ function HomeScreen({ setActiveTab }: { setActiveTab: (tab: TabId) => void }) {
 
       <section className="mb-3 grid grid-cols-2 gap-4">
         <DashboardCard
-          icon={<CheckSquare className="h-5 w-5 text-orange-400" />}
+          icon={<Sun className="h-5 w-5 text-orange-400" />}
           title={copy.cardToday}
-          value="10"
+          value={String(inboxCount)}
           subtitle={copy.tasksLabel}
           bg="bg-[linear-gradient(135deg,#f7efe9_0%,#f4efed_100%)]"
-          onClick={() => setActiveTab('plan')}
+          onClick={onOpenInbox}
         />
         <DashboardCard
-          icon={<Calendar className="h-5 w-5 text-violet-400" />}
-          title={copy.cardTodo}
-          value="5"
-          subtitle={copy.tasksLabel}
-          bg="bg-[linear-gradient(135deg,#f0eefb_0%,#f2f0fb_100%)]"
-          onClick={() => setActiveTab('plan')}
-        />
-        <DashboardCard
-          icon={<CalendarDays className="h-5 w-5 text-cyan-400" />}
+          icon={<CalendarRange className="h-5 w-5 text-cyan-400" />}
           title={copy.cardWeek}
-          value="3"
+          value={String(weekCount)}
           subtitle={copy.tasksLabel}
           bg="bg-[linear-gradient(135deg,#ecf5f5_0%,#edf2f2_100%)]"
-          onClick={() => setActiveTab('calendar')}
+          onClick={onOpenWeek}
         />
         <DashboardCard
-          icon={<ShoppingCart className="h-5 w-5 text-violet-400" />}
+          icon={<FolderKanban className="h-5 w-5 text-violet-400" />}
           title={copy.cardProjects}
-          value="15"
+          value={String(projectsCount)}
           subtitle={copy.tasksLabel}
           bg="bg-[linear-gradient(135deg,#f0eefb_0%,#f2f0fb_100%)]"
           onClick={() => setActiveTab('projects')}
@@ -811,56 +1009,64 @@ function HomeScreen({ setActiveTab }: { setActiveTab: (tab: TabId) => void }) {
       </section>
 
       <section className="mb-2">
-        <div className="mb-2 flex items-center justify-between gap-3">
-          <div className="flex items-center gap-3">
-            <Settings className="h-7 w-7 text-violet-400" />
-            <h3 className="text-[18px] font-semibold tracking-[-0.03em] text-slate-800">
-              {copy.upcoming}
-            </h3>
-          </div>
-
+        {nextItem ? (
           <button
-            className="flex shrink-0 items-center gap-1 text-[14px] font-medium text-indigo-400"
-            onClick={() => setActiveTab('plan')}
             type="button"
+            onClick={onOpenInbox}
+            className="mb-3 flex w-full items-start gap-3 rounded-[18px] bg-[linear-gradient(135deg,#eef2ff_0%,#f5f3ff_100%)] p-3 text-left shadow-sm"
           >
-            {copy.seeAll}
-            <ChevronRight className="h-4 w-4" />
+            <div className="shrink-0 rounded-full bg-white/80 p-2">
+              <Bell className="h-4 w-4 text-indigo-500" />
+            </div>
+            <div className="min-w-0 flex-1">
+              <div className="text-[12px] font-semibold uppercase tracking-wide text-indigo-500">
+                Nadchodzące — {nextItem.time} {nextItem.title}
+              </div>
+              <div className="mt-0.5 text-[13px] leading-5 text-slate-700">
+                Masz {timeUntilLabel(nextItem.time, now)}
+                {nextItem.note ? `, pamiętaj o ${nextItem.note}` : ''}.
+              </div>
+            </div>
           </button>
+        ) : null}
+
+        <div className="mb-2 flex items-center gap-3">
+          <Clock className="h-7 w-7 text-violet-400" />
+          <h3 className="text-[18px] font-semibold text-slate-800">
+            {copy.upcoming}
+          </h3>
         </div>
 
         <div className="rounded-[22px] bg-white/75 p-3 shadow-sm">
-          <button
-            className="flex w-full items-center justify-between gap-3 border-b border-slate-200 pb-3 text-left"
-            onClick={() => setActiveTab('plan')}
-            type="button"
-          >
-            <div className="flex min-w-0 items-center gap-3">
-              <div className="h-4 w-4 shrink-0 rounded-full bg-violet-400" />
-              <div className="shrink-0 text-[15px] font-semibold text-slate-800">11:00</div>
-              <div className="truncate text-[15px] text-slate-700">{copy.event1}</div>
+          {upcomingToday.length === 0 ? (
+            <div className="px-1 py-2 text-[13px] text-slate-400">
+              Nic więcej zaplanowanego na dziś.
             </div>
-
-            <div className="shrink-0 rounded-2xl bg-violet-100 px-3 py-1.5 text-[13px] font-medium text-violet-500">
-              {copy.meetingTag}
-            </div>
-          </button>
-
-          <button
-            className="flex w-full items-center justify-between gap-3 pt-3 text-left"
-            onClick={() => setActiveTab('plan')}
-            type="button"
-          >
-            <div className="flex min-w-0 items-center gap-3">
-              <div className="h-4 w-4 shrink-0 rounded-full bg-orange-300" />
-              <div className="shrink-0 text-[15px] font-semibold text-slate-800">15:30</div>
-              <div className="truncate text-[15px] text-slate-700">{copy.event2}</div>
-            </div>
-
-            <div className="shrink-0 rounded-2xl bg-orange-100 px-3 py-1.5 text-[13px] font-medium text-orange-400">
-              {copy.taskTag}
-            </div>
-          </button>
+          ) : (
+            upcomingToday.map((it, idx) => (
+              <button
+                key={`${it.kind}-${it.id}`}
+                type="button"
+                onClick={onOpenInbox}
+                className={`flex w-full items-center justify-between gap-3 text-left ${
+                  idx > 0 ? 'mt-3 border-t border-slate-200 pt-3' : ''
+                }`}
+              >
+                <div className="flex min-w-0 items-center gap-3">
+                  <div className={`h-4 w-4 shrink-0 rounded-full ${it.dotClass}`} />
+                  <div className="shrink-0 text-[15px] font-semibold text-slate-800">
+                    {it.time}
+                  </div>
+                  <div className="truncate text-[15px] text-slate-700">{it.title}</div>
+                </div>
+                <div
+                  className={`shrink-0 rounded-2xl px-3 py-1.5 text-[13px] font-medium ${it.badgeClass}`}
+                >
+                  {it.badge}
+                </div>
+              </button>
+            ))
+          )}
         </div>
       </section>
 
@@ -1049,14 +1255,7 @@ function ChatScreen({
       <Header
         title="Chat"
         subtitle={copy.version}
-        showProfile={false}
-        showBell={false}
-        extraLeft={<ChevronLeft className="mt-1 h-10 w-10 text-indigo-500" />}
-        extraRight={
-          <div className="rounded-full border border-indigo-200 p-3">
-            <MoreVertical className="h-8 w-8 text-indigo-400" />
-          </div>
-        }
+        icon={<MessageCircle className="h-10 w-10 text-indigo-500" />}
       />
 
       <div className="-mx-5 min-h-0 flex-1 bg-[linear-gradient(180deg,#edf1f9_0%,#ebedf5_100%)] px-5 py-5">
@@ -1422,7 +1621,6 @@ function CalendarScreen({
         title="Kalendarz"
         subtitle={copy.version}
         icon={<Calendar className="h-10 w-10 text-indigo-500" />}
-        extraRight={<Mail className="h-8 w-8 text-indigo-300" />}
       />
 
       <div className="-mx-5 mb-4 bg-[linear-gradient(180deg,#edf1f9_0%,#ebedf5_100%)] px-5 py-4">
@@ -1995,11 +2193,70 @@ function CalendarScreen({
 function ProjectsScreen({
   projectItems,
   setProjectItems,
+  shoppingPool,
+  setShoppingPool,
 }: {
   projectItems: ProjectItem[];
   setProjectItems: React.Dispatch<React.SetStateAction<ProjectItem[]>>;
+  shoppingPool: ShoppingPoolItem[];
+  setShoppingPool: React.Dispatch<React.SetStateAction<ShoppingPoolItem[]>>;
 }) {
   const [newProjectItem, setNewProjectItem] = useState('');
+  const [pickingId, setPickingId] = useState<string | null>(null);
+  const [expandedId, setExpandedId] = useState<string | null>(null);
+
+  function addChecklist(taskId: string, label: string) {
+    setProjectItems((prev) =>
+      prev.map((i) =>
+        i.id === taskId
+          ? {
+              ...i,
+              checklist: [
+                ...i.checklist,
+                { id: `chk-${Date.now()}`, label, done: false },
+              ],
+            }
+          : i
+      )
+    );
+  }
+
+  function toggleChecklist(taskId: string, chkId: string) {
+    setProjectItems((prev) =>
+      prev.map((i) =>
+        i.id === taskId
+          ? {
+              ...i,
+              checklist: i.checklist.map((c) =>
+                c.id === chkId ? { ...c, done: !c.done } : c
+              ),
+            }
+          : i
+      )
+    );
+  }
+
+  function removeChecklist(taskId: string, chkId: string) {
+    setProjectItems((prev) =>
+      prev.map((i) =>
+        i.id === taskId
+          ? { ...i, checklist: i.checklist.filter((c) => c.id !== chkId) }
+          : i
+      )
+    );
+  }
+
+  function toggleShopping(poolId: string) {
+    setShoppingPool((prev) => prev.filter((p) => p.id !== poolId));
+  }
+
+  function setDueAt(id: string, nextDate: string | null, nextTime: string | null) {
+    setProjectItems((prev) =>
+      prev.map((item) =>
+        item.id === id ? { ...item, dueAt: nextDate, time: nextTime } : item
+      )
+    );
+  }
 
   function addManualProjectItem() {
     const trimmed = newProjectItem.trim();
@@ -2013,6 +2270,9 @@ function ProjectsScreen({
         category: extractProjectCategoryFromChat(trimmed),
         done: false,
         source: 'manual',
+        dueAt: null,
+        time: null,
+        checklist: [],
       },
     ]);
 
@@ -2037,15 +2297,15 @@ function ProjectsScreen({
 
       const icon =
         category === 'shopping' ? (
-          <ShoppingCart className="h-7 w-7 text-indigo-400" />
+          <ShoppingCart className="h-4 w-4 text-indigo-400" />
         ) : category === 'reading' ? (
-          <BookOpen className="h-7 w-7 text-indigo-400" />
+          <BookOpen className="h-4 w-4 text-indigo-400" />
         ) : category === 'ideas' ? (
-          <Lightbulb className="h-7 w-7 text-indigo-400" />
+          <Lightbulb className="h-4 w-4 text-indigo-400" />
         ) : category === 'to_check' ? (
-          <Search className="h-7 w-7 text-indigo-400" />
+          <Search className="h-4 w-4 text-indigo-400" />
         ) : (
-          <Box className="h-7 w-7 text-indigo-400" />
+          <Box className="h-4 w-4 text-indigo-400" />
         );
 
       return {
@@ -2061,86 +2321,94 @@ function ProjectsScreen({
   return (
     <div className="flex h-full flex-col">
       <Header title="Projekty" subtitle={copy.version} icon={<Package className="h-10 w-10 text-indigo-300" />} />
-      <SearchBar placeholder="Szukaj w projektach..." />
 
-      <div className="mb-4 rounded-[22px] bg-white/75 p-4 shadow-sm">
-        <div className="mb-2 text-[14px] font-medium text-slate-500">Dodaj luźną myśl do Projektów</div>
+      <div className="mb-3 rounded-[18px] bg-white/75 p-3 shadow-sm">
         <div className="flex items-center gap-2">
           <input
             value={newProjectItem}
             onChange={(e) => setNewProjectItem(e.target.value)}
-            className="flex-1 rounded-2xl border border-slate-200 px-4 py-3 text-[15px] outline-none"
-            placeholder='Np. Muszę przeczytać książkę "Tysiąc mil podwodnej żeglugi"'
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') {
+                e.preventDefault();
+                addManualProjectItem();
+              }
+            }}
+            className="flex-1 rounded-2xl border border-slate-200 px-4 py-2.5 text-[14px] outline-none"
+            placeholder="Nowy projekt..."
           />
           <button
             type="button"
             onClick={addManualProjectItem}
-            className="rounded-full bg-[linear-gradient(90deg,#4f75ff,#3b82f6)] px-4 py-3 text-[14px] text-white"
+            className="rounded-full bg-[linear-gradient(90deg,#4f75ff,#3b82f6)] px-4 py-2.5 text-[13px] font-semibold text-white"
           >
             Dodaj
           </button>
         </div>
       </div>
 
-      <div className="min-h-0 flex-1 space-y-4 overflow-y-auto pr-1">
-        {groups.map((group) => (
-          <div key={group.key}>
-            <div className="mb-3 flex items-center justify-between">
-              <div className="flex items-center gap-3">
-                {group.icon}
-                <h3 className="text-[20px] font-semibold text-slate-800">{group.title}</h3>
-              </div>
+      <div className="min-h-0 flex-1 overflow-y-auto pr-1 pb-6">
+        <div className="mb-3 text-[13px] leading-5 text-slate-500">
+          Pomysły i zadania pogrupowane wg kategorii. Strzałka — przenieś na inny dzień. Ptaszek — zrobione. Krzyżyk — usuń.
+        </div>
 
-              <div className="flex items-center gap-3">
-                <div className="rounded-xl bg-indigo-100 px-3 py-1 text-[16px] font-medium text-indigo-400">
-                  {group.count}
+        <div className="space-y-4">
+          {groups.map((group) => (
+            <div key={group.key}>
+              <div className="mb-2 flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <span className="text-indigo-400">{group.icon}</span>
+                  <div className="text-[15px] font-bold text-slate-800">{group.title}</div>
                 </div>
-                <ChevronDown className="h-6 w-6 text-indigo-400" />
-              </div>
-            </div>
-
-            <div className="rounded-[22px] bg-white/75 p-3 shadow-sm">
-              {group.items.length === 0 ? (
-                <div className="px-3 py-4 text-[15px] text-slate-400">Brak pozycji w tej kategorii.</div>
-              ) : (
-                group.items.map((item) => (
-                  <div
-                    key={item.id}
-                    className="flex items-center justify-between gap-3 border-b border-slate-200 px-3 py-3 last:border-b-0"
-                  >
-                    <button
-                      type="button"
-                      onClick={() => toggleProjectItem(item.id)}
-                      className="flex min-w-0 items-center gap-3 text-left"
-                    >
-                      <div className={`flex h-7 w-7 items-center justify-center rounded-md border-2 ${item.done ? 'border-indigo-300 bg-indigo-50' : 'border-slate-300'}`}>
-                        {item.done ? <Check className="h-5 w-5 text-indigo-400" /> : null}
-                      </div>
-                      <div className="min-w-0">
-                        <div className={`truncate text-[17px] ${item.done ? 'text-slate-400 line-through' : 'text-slate-700'}`}>
-                          {item.label}
-                        </div>
-                        <div className="text-[12px] text-slate-400">
-                          {item.source === 'chat' ? 'Z czatu' : item.source === 'manual' ? 'Dodane ręcznie' : 'Z kalendarza'}
-                        </div>
-                      </div>
-                    </button>
-
-                    <button
-                      type="button"
-                      onClick={() => removeProjectItem(item.id)}
-                      className="rounded-full bg-rose-50 p-2 text-rose-500"
-                      title="Usuń z projektów"
-                    >
-                      <Trash2 className="h-4 w-4" />
-                    </button>
+                {group.items.length > 0 ? (
+                  <div className="text-[12px] text-slate-400">
+                    {group.items.length} {pluralPL(group.items.length, ['pozycja', 'pozycje', 'pozycji'])}
                   </div>
-                ))
+                ) : null}
+              </div>
+
+              {group.items.length === 0 ? (
+                <div className="rounded-[14px] bg-white/40 px-3 py-2 text-[12px] text-slate-400">
+                  Brak pozycji w tej kategorii.
+                </div>
+              ) : (
+                <div className="space-y-2">
+                  {group.items.map((item) => (
+                    <TaskRow
+                      key={item.id}
+                      item={item}
+                      onToggle={() => toggleProjectItem(item.id)}
+                      onPickDate={() => setPickingId(item.id)}
+                      onDelete={() => removeProjectItem(item.id)}
+                      expanded={expandedId === item.id}
+                      onToggleExpand={() =>
+                        setExpandedId((cur) => (cur === item.id ? null : item.id))
+                      }
+                      shoppingPool={shoppingPool}
+                      onShoppingToggle={toggleShopping}
+                      onChecklistAdd={(label) => addChecklist(item.id, label)}
+                      onChecklistToggle={(chkId) => toggleChecklist(item.id, chkId)}
+                      onChecklistRemove={(chkId) => removeChecklist(item.id, chkId)}
+                    />
+                  ))}
+                </div>
               )}
             </div>
-          </div>
-        ))}
+          ))}
+        </div>
       </div>
+
+      {pickingId ? (() => {
+        const item = projectItems.find((i) => i.id === pickingId);
+        if (!item) return null;
+        return (
+          <DatePickerPopup
+            value={item.dueAt}
+            valueTime={item.time}
+            onChange={(d, t) => setDueAt(item.id, d, t)}
+            onClose={() => setPickingId(null)}
+          />
+        );
+      })() : null}
     </div>
   );
 }
@@ -3454,6 +3722,784 @@ function DataScreen({ onBack }: { onBack: () => void }) {
   );
 }
 
+function DatePickerPopup({
+  value,
+  valueTime = null,
+  onChange,
+  onClose,
+}: {
+  value: string | null;
+  valueTime?: string | null;
+  onChange: (date: string | null, time: string | null) => void;
+  onClose: () => void;
+}) {
+  const initial = value ? new Date(value) : new Date();
+  const [viewYear, setViewYear] = useState(initial.getFullYear());
+  const [viewMonth, setViewMonth] = useState(initial.getMonth());
+  const [time, setTime] = useState<string>(valueTime ?? '');
+
+  const firstDay = new Date(viewYear, viewMonth, 1);
+  const jsWeekday = firstDay.getDay();
+  const mondayOffset = jsWeekday === 0 ? 6 : jsWeekday - 1;
+  const daysInMonth = new Date(viewYear, viewMonth + 1, 0).getDate();
+
+  const cells: Array<{ day: number | null; key: string }> = [];
+  for (let i = 0; i < mondayOffset; i += 1) cells.push({ day: null, key: `empty-${i}` });
+  for (let d = 1; d <= daysInMonth; d += 1) cells.push({ day: d, key: `d-${d}` });
+  while (cells.length % 7 !== 0) cells.push({ day: null, key: `empty-end-${cells.length}` });
+
+  function goMonth(delta: number) {
+    const d = new Date(viewYear, viewMonth + delta, 1);
+    setViewYear(d.getFullYear());
+    setViewMonth(d.getMonth());
+  }
+
+  function commit(date: string | null) {
+    const t = time.trim() || null;
+    onChange(date, date ? t : null);
+    onClose();
+  }
+
+  function pickDay(day: number) {
+    const key = `${viewYear}-${pad2(viewMonth + 1)}-${pad2(day)}`;
+    commit(key);
+  }
+
+  function pickQuick(v: string | null) {
+    commit(v);
+  }
+
+  const today = todayKey();
+  const tomorrow = tomorrowKey();
+  const endWeek = endOfWeekKey();
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+      <button
+        type="button"
+        onClick={onClose}
+        className="absolute inset-0 bg-slate-900/40 backdrop-blur-sm"
+        aria-label="Zamknij"
+      />
+      <div className="relative z-10 w-full max-w-[360px] rounded-[24px] bg-white p-4 shadow-[0_20px_60px_rgba(15,23,42,0.25)]">
+        <div className="mb-3 flex items-center justify-between">
+          <div className="text-[16px] font-semibold text-slate-800">Data i godzina</div>
+          <button
+            type="button"
+            onClick={onClose}
+            className="flex h-8 w-8 items-center justify-center rounded-full text-slate-400 hover:bg-slate-100"
+            aria-label="Zamknij"
+          >
+            <X className="h-4 w-4" />
+          </button>
+        </div>
+
+        <div className="mb-3 grid grid-cols-2 gap-2">
+          <button
+            type="button"
+            onClick={() => pickQuick(today)}
+            className="rounded-[12px] bg-indigo-50 px-3 py-2 text-[13px] font-semibold text-indigo-600"
+          >
+            Dziś
+          </button>
+          <button
+            type="button"
+            onClick={() => pickQuick(tomorrow)}
+            className="rounded-[12px] bg-indigo-50 px-3 py-2 text-[13px] font-semibold text-indigo-600"
+          >
+            Jutro
+          </button>
+          <button
+            type="button"
+            onClick={() => pickQuick(endWeek)}
+            className="rounded-[12px] bg-indigo-50 px-3 py-2 text-[13px] font-semibold text-indigo-600"
+          >
+            Koniec tygodnia
+          </button>
+          <button
+            type="button"
+            onClick={() => pickQuick(null)}
+            className="rounded-[12px] bg-slate-100 px-3 py-2 text-[13px] font-semibold text-slate-600"
+          >
+            Bez daty
+          </button>
+        </div>
+
+        <div className="mb-3 flex items-center gap-2">
+          <label className="shrink-0 text-[13px] font-semibold text-slate-600">Godzina</label>
+          <input
+            type="time"
+            value={time}
+            onChange={(e) => setTime(e.target.value)}
+            className="flex-1 rounded-[12px] border border-slate-200 px-3 py-2 text-[14px] outline-none"
+          />
+          {time ? (
+            <button
+              type="button"
+              onClick={() => setTime('')}
+              className="rounded-[12px] bg-slate-100 px-3 py-2 text-[12px] font-semibold text-slate-500"
+              title="Wyczyść godzinę"
+            >
+              Wyczyść
+            </button>
+          ) : null}
+        </div>
+
+        <div className="mb-2 flex items-center justify-between">
+          <button
+            type="button"
+            onClick={() => goMonth(-1)}
+            className="flex h-8 w-8 items-center justify-center rounded-full hover:bg-slate-100"
+            aria-label="Poprzedni miesiąc"
+          >
+            <ChevronLeft className="h-4 w-4 text-slate-600" />
+          </button>
+          <div className="text-[14px] font-semibold text-slate-700">
+            {MONTHS_PL[viewMonth]} {viewYear}
+          </div>
+          <button
+            type="button"
+            onClick={() => goMonth(1)}
+            className="flex h-8 w-8 items-center justify-center rounded-full hover:bg-slate-100"
+            aria-label="Następny miesiąc"
+          >
+            <ChevronRight className="h-4 w-4 text-slate-600" />
+          </button>
+        </div>
+
+        <div className="mb-1 grid grid-cols-7 gap-1">
+          {WEEKDAYS_SHORT.map((label) => (
+            <div key={label} className="text-center text-[11px] font-semibold text-slate-400">
+              {label}
+            </div>
+          ))}
+        </div>
+
+        <div className="grid grid-cols-7 gap-1">
+          {cells.map((cell) => {
+            if (!cell.day) return <div key={cell.key} className="h-9" />;
+            const cellKey = `${viewYear}-${pad2(viewMonth + 1)}-${pad2(cell.day)}`;
+            const isSelected = cellKey === value;
+            const isToday = cellKey === today;
+            return (
+              <button
+                key={cell.key}
+                type="button"
+                onClick={() => pickDay(cell.day!)}
+                className={`flex h-9 items-center justify-center rounded-full text-[13px] font-semibold ${
+                  isSelected
+                    ? 'bg-indigo-500 text-white'
+                    : isToday
+                    ? 'bg-indigo-100 text-indigo-600'
+                    : 'text-slate-700 hover:bg-slate-100'
+                }`}
+              >
+                {cell.day}
+              </button>
+            );
+          })}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function TaskRow({
+  item,
+  onToggle,
+  onPickDate,
+  onDelete,
+  showCategory = false,
+  expanded = false,
+  onToggleExpand,
+  shoppingPool,
+  onShoppingToggle,
+  onChecklistAdd,
+  onChecklistToggle,
+  onChecklistRemove,
+}: {
+  item: ProjectItem;
+  onToggle: () => void;
+  onPickDate: () => void;
+  onDelete: () => void;
+  showCategory?: boolean;
+  expanded?: boolean;
+  onToggleExpand?: () => void;
+  shoppingPool?: ShoppingPoolItem[];
+  onShoppingToggle?: (poolId: string) => void;
+  onChecklistAdd?: (label: string) => void;
+  onChecklistToggle?: (checklistId: string) => void;
+  onChecklistRemove?: (checklistId: string) => void;
+}) {
+  const categoryMeta: Record<ProjectCategory, { label: string; color: string }> = {
+    shopping: { label: 'Zakupy', color: '#F59E0B' },
+    reading: { label: 'Przeczytać', color: '#8B5CF6' },
+    ideas: { label: 'Pomysły', color: '#10B981' },
+    to_check: { label: 'Do sprawdzenia', color: '#3B82F6' },
+    general: { label: 'Ogólne', color: '#6B7280' },
+  };
+  const meta = categoryMeta[item.category];
+  const dueLabel = formatDueWithTime(item.dueAt, item.time);
+  const showMeta = showCategory || !!dueLabel;
+  const isShopping = item.category === 'shopping';
+  const expandable = !!onToggleExpand;
+  const [draftCheck, setDraftCheck] = useState('');
+
+  function commitDraft() {
+    const trimmed = draftCheck.trim();
+    if (!trimmed || !onChecklistAdd) return;
+    onChecklistAdd(trimmed);
+    setDraftCheck('');
+  }
+
+  return (
+    <div className="rounded-[14px] bg-white/75 shadow-sm">
+      <div className="flex items-center gap-2 px-3 py-2.5">
+        <button
+          type="button"
+          onClick={onToggleExpand}
+          disabled={!expandable}
+          className="flex min-w-0 flex-1 items-center gap-2 text-left"
+        >
+          <div className="min-w-0 flex-1">
+            <div
+              className={`truncate text-[14px] ${
+                item.done ? 'text-slate-400 line-through' : 'text-slate-800'
+              }`}
+            >
+              {item.label}
+            </div>
+            {showMeta ? (
+              <div className="mt-0.5 flex items-center gap-1.5">
+                {showCategory ? (
+                  <>
+                    <div className="h-1.5 w-1.5 rounded-full" style={{ backgroundColor: meta.color }} />
+                    <span className="text-[11px] text-slate-500">
+                      {meta.label}
+                      {dueLabel ? ` · ${dueLabel}` : ''}
+                    </span>
+                  </>
+                ) : (
+                  <span className="text-[11px] text-slate-500">{dueLabel}</span>
+                )}
+              </div>
+            ) : null}
+          </div>
+          {expandable ? (
+            expanded ? (
+              <ChevronUp className="h-4 w-4 shrink-0 text-slate-400" />
+            ) : (
+              <ChevronDown className="h-4 w-4 shrink-0 text-slate-400" />
+            )
+          ) : null}
+        </button>
+
+        <button
+          type="button"
+          onClick={onToggle}
+          className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-full transition-colors ${
+            item.done
+              ? 'bg-emerald-500 text-white'
+              : 'bg-emerald-50 text-emerald-500 hover:bg-emerald-100'
+          }`}
+          aria-label={item.done ? 'Oznacz jako niezrobione' : 'Oznacz jako zrobione'}
+          title={item.done ? 'Cofnij zrobione' : 'Zrobione'}
+        >
+          <Check className="h-4 w-4" />
+        </button>
+
+        <button
+          type="button"
+          onClick={onPickDate}
+          className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-indigo-50 text-indigo-500 hover:bg-indigo-100"
+          aria-label="Przenieś na inny dzień"
+          title="Przenieś na inny dzień"
+        >
+          <ChevronRight className="h-4 w-4" />
+        </button>
+
+        <button
+          type="button"
+          onClick={onDelete}
+          className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-rose-50 text-rose-500 hover:bg-rose-100"
+          aria-label="Usuń"
+          title="Usuń"
+        >
+          <X className="h-4 w-4" />
+        </button>
+      </div>
+
+      {expanded ? (
+        <div className="border-t border-slate-100 px-3 py-3">
+          {isShopping ? (() => {
+            const pool = (shoppingPool ?? []).filter((p) => !p.done);
+            if (pool.length === 0) {
+              return (
+                <div className="text-[12px] text-slate-400">Lista zakupów jest pusta.</div>
+              );
+            }
+            return (
+              <ul className="space-y-1.5">
+                {pool.map((p) => (
+                  <li key={p.id} className="flex items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={() => onShoppingToggle?.(p.id)}
+                      className="flex h-5 w-5 shrink-0 items-center justify-center rounded-md border-2 border-emerald-300 bg-white hover:bg-emerald-50"
+                      aria-label="Kupione"
+                      title="Kupione (usuwa z listy)"
+                    />
+                    <span className="text-[13px] text-slate-700">{p.label}</span>
+                  </li>
+                ))}
+              </ul>
+            );
+          })() : (
+            <div className="space-y-2">
+              {item.checklist.length > 0 ? (
+                <ul className="space-y-1.5">
+                  {item.checklist.map((c) => (
+                    <li key={c.id} className="flex items-center gap-2">
+                      <button
+                        type="button"
+                        onClick={() => onChecklistToggle?.(c.id)}
+                        className={`flex h-5 w-5 shrink-0 items-center justify-center rounded-md border-2 ${
+                          c.done
+                            ? 'border-emerald-500 bg-emerald-500 text-white'
+                            : 'border-slate-300 bg-white text-emerald-500'
+                        }`}
+                        aria-label={c.done ? 'Cofnij zrobione' : 'Zrobione'}
+                      >
+                        {c.done ? <Check className="h-3 w-3" /> : null}
+                      </button>
+                      <span
+                        className={`flex-1 text-[13px] ${
+                          c.done ? 'text-slate-400 line-through' : 'text-slate-700'
+                        }`}
+                      >
+                        {c.label}
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => onChecklistRemove?.(c.id)}
+                        className="text-slate-300 hover:text-rose-400"
+                        aria-label="Usuń pozycję"
+                        title="Usuń pozycję"
+                      >
+                        <X className="h-3.5 w-3.5" />
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              ) : (
+                <div className="text-[12px] text-slate-400">Brak pozycji w checkliście.</div>
+              )}
+
+              {onChecklistAdd ? (
+                <div className="flex items-center gap-2 pt-1">
+                  <input
+                    value={draftCheck}
+                    onChange={(e) => setDraftCheck(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') {
+                        e.preventDefault();
+                        commitDraft();
+                      }
+                    }}
+                    className="flex-1 rounded-2xl border border-slate-200 px-3 py-1.5 text-[13px] outline-none"
+                    placeholder="Dodaj pozycję..."
+                  />
+                  <button
+                    type="button"
+                    onClick={commitDraft}
+                    className="rounded-full bg-indigo-50 px-3 py-1.5 text-[12px] font-semibold text-indigo-600"
+                  >
+                    +
+                  </button>
+                </div>
+              ) : null}
+            </div>
+          )}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+function InboxTasksScreen({
+  projectItems,
+  setProjectItems,
+  shoppingPool,
+  setShoppingPool,
+  onBack,
+}: {
+  projectItems: ProjectItem[];
+  setProjectItems: React.Dispatch<React.SetStateAction<ProjectItem[]>>;
+  shoppingPool: ShoppingPoolItem[];
+  setShoppingPool: React.Dispatch<React.SetStateAction<ShoppingPoolItem[]>>;
+  onBack: () => void;
+}) {
+  const [pickingId, setPickingId] = useState<string | null>(null);
+  const [expandedId, setExpandedId] = useState<string | null>(null);
+  const [newItem, setNewItem] = useState('');
+
+  const today = todayKey();
+  const inbox = projectItems.filter((i) => !i.dueAt || i.dueAt === today);
+
+  function toggleDone(id: string) {
+    setProjectItems((prev) =>
+      prev.map((i) => (i.id === id ? { ...i, done: !i.done } : i))
+    );
+  }
+
+  function setDueAt(id: string, nextDate: string | null, nextTime: string | null) {
+    setProjectItems((prev) =>
+      prev.map((i) =>
+        i.id === id ? { ...i, dueAt: nextDate, time: nextTime } : i
+      )
+    );
+  }
+
+  function removeItem(id: string) {
+    setProjectItems((prev) => prev.filter((i) => i.id !== id));
+  }
+
+  function addChecklist(taskId: string, label: string) {
+    setProjectItems((prev) =>
+      prev.map((i) =>
+        i.id === taskId
+          ? {
+              ...i,
+              checklist: [
+                ...i.checklist,
+                { id: `chk-${Date.now()}`, label, done: false },
+              ],
+            }
+          : i
+      )
+    );
+  }
+
+  function toggleChecklist(taskId: string, chkId: string) {
+    setProjectItems((prev) =>
+      prev.map((i) =>
+        i.id === taskId
+          ? {
+              ...i,
+              checklist: i.checklist.map((c) =>
+                c.id === chkId ? { ...c, done: !c.done } : c
+              ),
+            }
+          : i
+      )
+    );
+  }
+
+  function removeChecklist(taskId: string, chkId: string) {
+    setProjectItems((prev) =>
+      prev.map((i) =>
+        i.id === taskId
+          ? { ...i, checklist: i.checklist.filter((c) => c.id !== chkId) }
+          : i
+      )
+    );
+  }
+
+  function toggleShopping(poolId: string) {
+    setShoppingPool((prev) => prev.filter((p) => p.id !== poolId));
+  }
+
+  function addItem() {
+    const trimmed = newItem.trim();
+    if (!trimmed) return;
+    setProjectItems((prev) => [
+      ...prev,
+      {
+        id: `project-${Date.now()}`,
+        label: trimmed,
+        category: extractProjectCategoryFromChat(trimmed),
+        done: false,
+        source: 'manual',
+        dueAt: null,
+        time: null,
+        checklist: [],
+      },
+    ]);
+    setNewItem('');
+  }
+
+  const picking = inbox.find((i) => i.id === pickingId) || null;
+
+  return (
+    <div className="flex h-full flex-col">
+      <SubHeader title="Do zrobienia" onBack={onBack} />
+
+      <div className="mb-3 rounded-[18px] bg-white/75 p-3 shadow-sm">
+        <div className="flex items-center gap-2">
+          <input
+            value={newItem}
+            onChange={(e) => setNewItem(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') {
+                e.preventDefault();
+                addItem();
+              }
+            }}
+            className="flex-1 rounded-2xl border border-slate-200 px-4 py-2.5 text-[14px] outline-none"
+            placeholder="Nowe zadanie..."
+          />
+          <button
+            type="button"
+            onClick={addItem}
+            className="rounded-full bg-[linear-gradient(90deg,#4f75ff,#3b82f6)] px-4 py-2.5 text-[13px] font-semibold text-white"
+          >
+            Dodaj
+          </button>
+        </div>
+      </div>
+
+      <div className="min-h-0 flex-1 overflow-y-auto pr-1 pb-6">
+        <div className="mb-3 text-[13px] leading-5 text-slate-500">
+          Zadania na dziś i bez daty. Strzałka — przenieś na inny dzień. Ptaszek — zrobione. Krzyżyk — usuń.
+        </div>
+
+        {inbox.length === 0 ? (
+          <div className="rounded-[22px] bg-white/60 p-6 text-center">
+            <ListTodo className="mx-auto h-8 w-8 text-slate-400" />
+            <div className="mt-2 text-[14px] font-semibold text-slate-700">Skrzynka pusta</div>
+            <div className="mt-1 text-[12px] leading-5 text-slate-500">
+              Wszystko jest zaplanowane. Nowe zadania bez daty pojawią się tutaj.
+            </div>
+          </div>
+        ) : (
+          <div className="space-y-2">
+            {inbox.map((item) => (
+              <TaskRow
+                key={item.id}
+                item={item}
+                onToggle={() => toggleDone(item.id)}
+                onPickDate={() => setPickingId(item.id)}
+                onDelete={() => removeItem(item.id)}
+                showCategory
+                expanded={expandedId === item.id}
+                onToggleExpand={() =>
+                  setExpandedId((cur) => (cur === item.id ? null : item.id))
+                }
+                shoppingPool={shoppingPool}
+                onShoppingToggle={toggleShopping}
+                onChecklistAdd={(label) => addChecklist(item.id, label)}
+                onChecklistToggle={(chkId) => toggleChecklist(item.id, chkId)}
+                onChecklistRemove={(chkId) => removeChecklist(item.id, chkId)}
+              />
+            ))}
+          </div>
+        )}
+      </div>
+
+      {picking ? (
+        <DatePickerPopup
+          value={picking.dueAt}
+          valueTime={picking.time}
+          onChange={(d, t) => setDueAt(picking.id, d, t)}
+          onClose={() => setPickingId(null)}
+        />
+      ) : null}
+    </div>
+  );
+}
+
+function SevenDaysScreen({
+  events,
+  projectItems,
+  setProjectItems,
+  shoppingPool,
+  setShoppingPool,
+  onBack,
+}: {
+  events: CalendarEvent[];
+  projectItems: ProjectItem[];
+  setProjectItems: React.Dispatch<React.SetStateAction<ProjectItem[]>>;
+  shoppingPool: ShoppingPoolItem[];
+  setShoppingPool: React.Dispatch<React.SetStateAction<ShoppingPoolItem[]>>;
+  onBack: () => void;
+}) {
+  const [pickingId, setPickingId] = useState<string | null>(null);
+  const [expandedId, setExpandedId] = useState<string | null>(null);
+
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+
+  const days: { key: string; date: Date; label: string }[] = [];
+  for (let i = 0; i < 7; i += 1) {
+    const d = new Date(today);
+    d.setDate(today.getDate() + i);
+    const key = toDateKey(d);
+    let label: string;
+    if (i === 0) label = 'Dziś';
+    else if (i === 1) label = 'Jutro';
+    else label = `${WEEKDAYS_SHORT[(d.getDay() + 6) % 7]}, ${d.getDate()} ${MONTHS_PL[d.getMonth()].toLowerCase()}`;
+    days.push({ key, date: d, label });
+  }
+
+  function toggleDone(id: string) {
+    setProjectItems((prev) =>
+      prev.map((i) => (i.id === id ? { ...i, done: !i.done } : i))
+    );
+  }
+
+  function setDueAt(id: string, nextDate: string | null, nextTime: string | null) {
+    setProjectItems((prev) =>
+      prev.map((i) =>
+        i.id === id ? { ...i, dueAt: nextDate, time: nextTime } : i
+      )
+    );
+  }
+
+  function removeItem(id: string) {
+    setProjectItems((prev) => prev.filter((i) => i.id !== id));
+  }
+
+  function addChecklist(taskId: string, label: string) {
+    setProjectItems((prev) =>
+      prev.map((i) =>
+        i.id === taskId
+          ? {
+              ...i,
+              checklist: [
+                ...i.checklist,
+                { id: `chk-${Date.now()}`, label, done: false },
+              ],
+            }
+          : i
+      )
+    );
+  }
+
+  function toggleChecklist(taskId: string, chkId: string) {
+    setProjectItems((prev) =>
+      prev.map((i) =>
+        i.id === taskId
+          ? {
+              ...i,
+              checklist: i.checklist.map((c) =>
+                c.id === chkId ? { ...c, done: !c.done } : c
+              ),
+            }
+          : i
+      )
+    );
+  }
+
+  function removeChecklist(taskId: string, chkId: string) {
+    setProjectItems((prev) =>
+      prev.map((i) =>
+        i.id === taskId
+          ? { ...i, checklist: i.checklist.filter((c) => c.id !== chkId) }
+          : i
+      )
+    );
+  }
+
+  function toggleShopping(poolId: string) {
+    setShoppingPool((prev) => prev.filter((p) => p.id !== poolId));
+  }
+
+  const picking = projectItems.find((i) => i.id === pickingId) || null;
+
+  return (
+    <div className="flex h-full flex-col">
+      <SubHeader title="Ten tydzień" onBack={onBack} />
+
+      <div className="min-h-0 flex-1 overflow-y-auto pr-1 pb-6">
+        <div className="mb-3 text-[13px] leading-5 text-slate-500">
+          Wydarzenia i zadania na najbliższe 7 dni.
+        </div>
+
+        <div className="space-y-4">
+          {days.map((day) => {
+            const dayEvents = events.filter((e) => e.date === day.key);
+            const dayTasks = projectItems.filter((t) => t.dueAt === day.key);
+            const isEmpty = dayEvents.length === 0 && dayTasks.length === 0;
+
+            return (
+              <div key={day.key}>
+                <div className="mb-2 flex items-center justify-between">
+                  <div className="text-[15px] font-bold text-slate-800">{day.label}</div>
+                  {!isEmpty ? (
+                    <div className="text-[12px] text-slate-400">
+                      {dayEvents.length + dayTasks.length}{' '}
+                      {dayEvents.length + dayTasks.length === 1 ? 'pozycja' : 'pozycji'}
+                    </div>
+                  ) : null}
+                </div>
+
+                {isEmpty ? (
+                  <div className="rounded-[14px] bg-white/40 px-3 py-2 text-[12px] text-slate-400">
+                    Nic zaplanowanego
+                  </div>
+                ) : (
+                  <div className="space-y-2">
+                    {dayEvents
+                      .slice()
+                      .sort((a, b) => (a.time || '').localeCompare(b.time || ''))
+                      .map((e) => (
+                        <div
+                          key={e.id}
+                          className="flex items-center gap-3 rounded-[14px] bg-white/75 px-3 py-2.5 shadow-sm"
+                        >
+                          <div className={`h-2 w-2 shrink-0 rounded-full ${e.dotClass}`} />
+                          <div className="shrink-0 text-[13px] font-bold text-slate-700">
+                            {e.time || '—'}
+                          </div>
+                          <div className="min-w-0 flex-1 truncate text-[14px] text-slate-800">
+                            {e.title}
+                          </div>
+                          <span
+                            className={`shrink-0 rounded-full px-2 py-0.5 text-[10px] font-semibold ${e.badgeClass}`}
+                          >
+                            {e.badge}
+                          </span>
+                        </div>
+                      ))}
+                    {dayTasks.map((item) => (
+                      <TaskRow
+                        key={item.id}
+                        item={item}
+                        onToggle={() => toggleDone(item.id)}
+                        onPickDate={() => setPickingId(item.id)}
+                        onDelete={() => removeItem(item.id)}
+                        showCategory
+                        expanded={expandedId === item.id}
+                        onToggleExpand={() =>
+                          setExpandedId((cur) => (cur === item.id ? null : item.id))
+                        }
+                        shoppingPool={shoppingPool}
+                        onShoppingToggle={toggleShopping}
+                        onChecklistAdd={(label) => addChecklist(item.id, label)}
+                        onChecklistToggle={(chkId) => toggleChecklist(item.id, chkId)}
+                        onChecklistRemove={(chkId) => removeChecklist(item.id, chkId)}
+                      />
+                    ))}
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      </div>
+
+      {picking ? (
+        <DatePickerPopup
+          value={picking.dueAt}
+          valueTime={picking.time}
+          onChange={(d, t) => setDueAt(picking.id, d, t)}
+          onClose={() => setPickingId(null)}
+        />
+      ) : null}
+    </div>
+  );
+}
+
 function SettingsScreen({
   path,
   setPath,
@@ -3899,11 +4945,11 @@ export default function App() {
   ];
 
   const defaultProjectItems: ProjectItem[] = [
-    { id: 'project-1', label: 'Umówić spotkanie z zespołem', category: 'general', done: false, source: 'manual' },
-    { id: 'project-2', label: 'Muszę przeczytać książkę "Tysiąc mil podwodnej żeglugi"', category: 'reading', done: false, source: 'manual' },
-    { id: 'project-3', label: 'Mam pomysł na tracker', category: 'ideas', done: false, source: 'manual' },
-    { id: 'project-4', label: 'Sprawdzić dobrą aplikację do CRM', category: 'to_check', done: false, source: 'manual' },
-    { id: 'project-5', label: 'Kupić prezent na urodziny Ani', category: 'shopping', done: false, source: 'manual' },
+    { id: 'project-1', label: 'Umówić spotkanie z zespołem', category: 'general', done: false, source: 'manual', dueAt: null, time: null, checklist: [] },
+    { id: 'project-2', label: 'Muszę przeczytać książkę "Tysiąc mil podwodnej żeglugi"', category: 'reading', done: false, source: 'manual', dueAt: null, time: null, checklist: [] },
+    { id: 'project-3', label: 'Mam pomysł na tracker', category: 'ideas', done: false, source: 'manual', dueAt: null, time: null, checklist: [] },
+    { id: 'project-4', label: 'Sprawdzić dobrą aplikację do CRM', category: 'to_check', done: false, source: 'manual', dueAt: null, time: null, checklist: [] },
+    { id: 'project-5', label: 'Kupić prezent na urodziny Ani', category: 'shopping', done: false, source: 'manual', dueAt: null, time: null, checklist: [] },
   ];
 
   const [activeTab, setActiveTab] = useState<TabId>('home');
@@ -3934,7 +4980,26 @@ export default function App() {
       const raw = window.localStorage.getItem(STORAGE_KEY);
       if (!raw) return defaultProjectItems;
       const parsed = JSON.parse(raw);
-      return parsed.projectItems ?? defaultProjectItems;
+      const stored: unknown = parsed.projectItems;
+      if (!Array.isArray(stored)) return defaultProjectItems;
+      return stored.map((item: any) => ({
+        id: String(item?.id ?? `project-${Math.random().toString(36).slice(2)}`),
+        label: String(item?.label ?? ''),
+        category: item?.category ?? 'general',
+        done: !!item?.done,
+        source: item?.source ?? 'manual',
+        dueAt: typeof item?.dueAt === 'string' ? item.dueAt : null,
+        time: typeof item?.time === 'string' ? item.time : null,
+        checklist: Array.isArray(item?.checklist)
+          ? item.checklist
+              .filter((c: any) => c && typeof c.label === 'string')
+              .map((c: any) => ({
+                id: String(c.id ?? `chk-${Math.random().toString(36).slice(2)}`),
+                label: String(c.label),
+                done: !!c.done,
+              }))
+          : [],
+      }));
     } catch {
       return defaultProjectItems;
     }
@@ -4001,6 +5066,9 @@ export default function App() {
           category,
           done: false,
           source: 'chat',
+          dueAt: null,
+          time: null,
+          checklist: [],
         },
       ];
     });
@@ -4008,6 +5076,7 @@ export default function App() {
 
   const [settingsPath, setSettingsPath] = useState<SettingsPath>('root');
   const [showNotifications, setShowNotifications] = useState(false);
+  const [homeDetail, setHomeDetail] = useState<HomeDetailView>(null);
   const [readIds, setReadIds] = useState<string[]>(() => readIdList(NOTIFICATIONS_READ_KEY));
   const [dismissedIds, setDismissedIds] = useState<string[]>(() =>
     readIdList(NOTIFICATIONS_DISMISSED_KEY)
@@ -4057,6 +5126,7 @@ export default function App() {
     setActiveTab(tab);
     if (tab === 'settings') setSettingsPath('root');
     setShowNotifications(false);
+    setHomeDetail(null);
   }
 
   const navValue: NavContextType = {
@@ -4064,6 +5134,7 @@ export default function App() {
       setActiveTab('settings');
       setSettingsPath('account');
       setShowNotifications(false);
+      setHomeDetail(null);
     },
     openNotifications: () => setShowNotifications(true),
     unreadCount,
@@ -4081,6 +5152,27 @@ export default function App() {
         onDismiss={dismissNotification}
         onClearAll={clearAllNotifications}
         onClose={() => setShowNotifications(false)}
+      />
+    );
+  } else if (homeDetail === 'inbox-tasks') {
+    screen = (
+      <InboxTasksScreen
+        projectItems={projectItems}
+        setProjectItems={setProjectItems}
+        shoppingPool={shoppingPool}
+        setShoppingPool={setShoppingPool}
+        onBack={() => setHomeDetail(null)}
+      />
+    );
+  } else if (homeDetail === 'seven-days') {
+    screen = (
+      <SevenDaysScreen
+        events={events}
+        projectItems={projectItems}
+        setProjectItems={setProjectItems}
+        shoppingPool={shoppingPool}
+        setShoppingPool={setShoppingPool}
+        onBack={() => setHomeDetail(null)}
       />
     );
   } else {
@@ -4109,14 +5201,29 @@ export default function App() {
         );
         break;
       case 'projects':
-        screen = <ProjectsScreen projectItems={projectItems} setProjectItems={setProjectItems} />;
+        screen = (
+          <ProjectsScreen
+            projectItems={projectItems}
+            setProjectItems={setProjectItems}
+            shoppingPool={shoppingPool}
+            setShoppingPool={setShoppingPool}
+          />
+        );
         break;
       case 'settings':
         screen = <SettingsScreen path={settingsPath} setPath={setSettingsPath} />;
         break;
       case 'home':
       default:
-        screen = <HomeScreen setActiveTab={setActiveTab} />;
+        screen = (
+          <HomeScreen
+            setActiveTab={setActiveTab}
+            projectItems={projectItems}
+            events={events}
+            onOpenInbox={() => setHomeDetail('inbox-tasks')}
+            onOpenWeek={() => setHomeDetail('seven-days')}
+          />
+        );
         break;
     }
   }
