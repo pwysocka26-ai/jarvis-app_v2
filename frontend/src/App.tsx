@@ -472,9 +472,45 @@ function isShoppingEventTitle(title: string) {
   );
 }
 
+const SHOPPING_PLACES: Array<{ match: string[]; label: string }> = [
+  { match: ['biedron'], label: 'Biedronce' },
+  { match: ['lidl'], label: 'Lidlu' },
+  { match: ['kaufland'], label: 'Kauflandzie' },
+  { match: ['auchan'], label: 'Auchan' },
+  { match: ['tesco'], label: 'Tesco' },
+  { match: ['carrefour'], label: 'Carrefour' },
+  { match: ['żabka', 'zabka', 'żabce', 'zabce'], label: 'Żabce' },
+  { match: ['rossmann'], label: 'Rossmannie' },
+  { match: ['piekarni'], label: 'piekarni' },
+  { match: ['warzywniak', 'warzywniaku'], label: 'warzywniaku' },
+  { match: ['market', 'markecie'], label: 'markecie' },
+  { match: ['galeri'], label: 'galerii' },
+  { match: ['sklep'], label: 'sklepie' },
+];
+
+function findShoppingPlaceLabel(text: string): string | null {
+  const lower = text.toLowerCase();
+  for (const place of SHOPPING_PLACES) {
+    if (place.match.some((m) => lower.includes(m))) return place.label;
+  }
+  return null;
+}
+
+function hasShoppingPlace(text: string): boolean {
+  return findShoppingPlaceLabel(text) !== null;
+}
+
+function hasTimeOrPlace(text: string): boolean {
+  return !looksLikeUndatedThought(text) || hasShoppingPlace(text);
+}
+
 function extractShoppingItemFromChat(text: string) {
   const normalized = text.trim();
   const lower = normalized.toLowerCase();
+
+  if (hasTimeOrPlace(normalized)) {
+    return null;
+  }
 
   const triggers = [
     'muszę kupić ',
@@ -497,6 +533,79 @@ function extractShoppingItemFromChat(text: string) {
   }
 
   return null;
+}
+
+function parseDateFromChat(text: string): string | null {
+  const lower = text.toLowerCase();
+  if (lower.includes('pojutrze')) {
+    const d = new Date();
+    d.setDate(d.getDate() + 2);
+    return toDateKey(d);
+  }
+  if (lower.includes('jutro')) return tomorrowKey();
+  if (lower.includes('dziś') || lower.includes('dzis')) return todayKey();
+
+  const dayNames: Array<[string[], number]> = [
+    [['poniedziałek', 'poniedzialek'], 1],
+    [['wtorek'], 2],
+    [['środa', 'sroda', 'środę', 'srode'], 3],
+    [['czwartek'], 4],
+    [['piątek', 'piatek'], 5],
+    [['sobota', 'sobote', 'sobotę'], 6],
+    [['niedziela', 'niedziele', 'niedzielę'], 0],
+  ];
+  for (const [names, dow] of dayNames) {
+    if (names.some((n) => lower.includes(n))) {
+      const d = new Date();
+      const current = d.getDay();
+      let delta = dow - current;
+      if (delta <= 0) delta += 7;
+      d.setDate(d.getDate() + delta);
+      return toDateKey(d);
+    }
+  }
+  return null;
+}
+
+function parseTimeFromChat(text: string): string | null {
+  const withMinutes = text.match(/\bo\s+(\d{1,2})[:\.](\d{2})\b/i);
+  if (withMinutes) {
+    const h = Number(withMinutes[1]);
+    const min = Number(withMinutes[2]);
+    if (h >= 0 && h <= 23 && min >= 0 && min <= 59) {
+      return `${pad2(h)}:${pad2(min)}`;
+    }
+  }
+  const hourOnly = text.match(/\bo\s+(\d{1,2})\b/i);
+  if (hourOnly) {
+    const h = Number(hourOnly[1]);
+    if (h >= 0 && h <= 23) return `${pad2(h)}:00`;
+  }
+  return null;
+}
+
+function extractShoppingTaskFromChat(
+  text: string
+): { label: string; dueAt: string | null; time: string | null } | null {
+  const lower = text.toLowerCase();
+  if (!lower.includes('zakup')) return null;
+  if (!hasTimeOrPlace(text)) return null;
+
+  let label = text.trim();
+  const prefixes = ['muszę ', 'musze ', 'trzeba ', 'chcę ', 'chce '];
+  for (const p of prefixes) {
+    if (label.toLowerCase().startsWith(p)) {
+      label = label.slice(p.length);
+      break;
+    }
+  }
+  label = label.charAt(0).toUpperCase() + label.slice(1);
+
+  return {
+    label,
+    dueAt: parseDateFromChat(text),
+    time: parseTimeFromChat(text),
+  };
 }
 
 
@@ -852,7 +961,7 @@ function HomeScreen({
 
   const today = todayKey();
   const inboxCount = projectItems.filter(
-    (i) => !i.done && (!i.dueAt || i.dueAt === today)
+    (i) => !i.done && i.dueAt === today
   ).length;
 
   const weekEventsCount = events.filter((e) => isInNext7Days(e.date)).length;
@@ -1125,11 +1234,17 @@ function PlanScreen() {
 function ChatScreen({
   onShoppingDetected,
   onProjectDetected,
+  onShoppingTaskDetected,
   chatMessages,
   setChatMessages,
 }: {
   onShoppingDetected: (itemLabel: string) => void;
   onProjectDetected: (text: string) => void;
+  onShoppingTaskDetected: (payload: {
+    label: string;
+    dueAt: string | null;
+    time: string | null;
+  }) => void;
   chatMessages: ChatMessage[];
   setChatMessages: React.Dispatch<React.SetStateAction<ChatMessage[]>>;
 }) {
@@ -1159,14 +1274,31 @@ function ChatScreen({
     const extractedShoppingItem = extractShoppingItemFromChat(trimmed);
     if (extractedShoppingItem) {
       onShoppingDetected(extractedShoppingItem);
-      onProjectDetected(trimmed);
       setChatMessages((prev) => [
         ...prev,
         {
           id: `local-${Date.now()}`,
           role: 'assistant',
-          text: `Dodałem do listy zakupów: ${extractedShoppingItem}. Zapisałem to też w Projektach.`,
+          text: `Dodałem do listy zakupów: ${extractedShoppingItem}.`,
         },
+      ]);
+      inputRef.current?.focus();
+      return;
+    }
+
+    const shoppingTask = extractShoppingTaskFromChat(trimmed);
+    if (shoppingTask) {
+      onShoppingTaskDetected(shoppingTask);
+      const whenLabel =
+        shoppingTask.dueAt
+          ? formatDueWithTime(shoppingTask.dueAt, shoppingTask.time)
+          : shoppingTask.time;
+      const ack = whenLabel
+        ? `Dodałem zadanie zakupowe: ${shoppingTask.label} (${whenLabel}). Rozwiń je w "Do zrobienia" — pokaże się Twoja lista zakupów.`
+        : `Dodałem zadanie zakupowe: ${shoppingTask.label}. Rozwiń je w "Do zrobienia" — pokaże się Twoja lista zakupów.`;
+      setChatMessages((prev) => [
+        ...prev,
+        { id: `local-${Date.now()}`, role: 'assistant', text: ack },
       ]);
       inputRef.current?.focus();
       return;
@@ -2246,7 +2378,61 @@ function ProjectsScreen({
     );
   }
 
-  function toggleShopping(poolId: string) {
+  function shoppingAdd(label: string) {
+    const trimmed = label.trim();
+    if (!trimmed) return;
+    setShoppingPool((prev) => {
+      const exists = prev.some(
+        (p) => p.label.toLowerCase() === trimmed.toLowerCase()
+      );
+      if (exists) return prev;
+      return [
+        ...prev,
+        {
+          id: `pool-${Date.now()}`,
+          label: trimmed,
+          done: false,
+          linkedEventIds: [],
+        },
+      ];
+    });
+  }
+
+  function shoppingMarkBought(poolId: string) {
+    setShoppingPool((prev) =>
+      prev.map((p) => (p.id === poolId ? { ...p, done: !p.done } : p))
+    );
+  }
+
+  function shoppingMoveToProjects(poolId: string) {
+    setShoppingPool((prev) => {
+      const target = prev.find((p) => p.id === poolId);
+      if (target) {
+        setProjectItems((items) => {
+          const exists = items.some(
+            (i) => i.label.toLowerCase() === target.label.toLowerCase()
+          );
+          if (exists) return items;
+          return [
+            ...items,
+            {
+              id: `project-${Date.now()}`,
+              label: target.label,
+              category: 'shopping',
+              done: false,
+              source: 'manual',
+              dueAt: null,
+              time: null,
+              checklist: [],
+            },
+          ];
+        });
+      }
+      return prev.filter((p) => p.id !== poolId);
+    });
+  }
+
+  function shoppingRemove(poolId: string) {
     setShoppingPool((prev) => prev.filter((p) => p.id !== poolId));
   }
 
@@ -2384,7 +2570,10 @@ function ProjectsScreen({
                         setExpandedId((cur) => (cur === item.id ? null : item.id))
                       }
                       shoppingPool={shoppingPool}
-                      onShoppingToggle={toggleShopping}
+                      onShoppingAdd={shoppingAdd}
+                      onShoppingBought={shoppingMarkBought}
+                      onShoppingMoveToProjects={shoppingMoveToProjects}
+                      onShoppingDelete={shoppingRemove}
                       onChecklistAdd={(label) => addChecklist(item.id, label)}
                       onChecklistToggle={(chkId) => toggleChecklist(item.id, chkId)}
                       onChecklistRemove={(chkId) => removeChecklist(item.id, chkId)}
@@ -3913,7 +4102,10 @@ function TaskRow({
   expanded = false,
   onToggleExpand,
   shoppingPool,
-  onShoppingToggle,
+  onShoppingAdd,
+  onShoppingBought,
+  onShoppingMoveToProjects,
+  onShoppingDelete,
   onChecklistAdd,
   onChecklistToggle,
   onChecklistRemove,
@@ -3926,7 +4118,10 @@ function TaskRow({
   expanded?: boolean;
   onToggleExpand?: () => void;
   shoppingPool?: ShoppingPoolItem[];
-  onShoppingToggle?: (poolId: string) => void;
+  onShoppingAdd?: (label: string) => void;
+  onShoppingBought?: (poolId: string) => void;
+  onShoppingMoveToProjects?: (poolId: string) => void;
+  onShoppingDelete?: (poolId: string) => void;
   onChecklistAdd?: (label: string) => void;
   onChecklistToggle?: (checklistId: string) => void;
   onChecklistRemove?: (checklistId: string) => void;
@@ -3944,12 +4139,20 @@ function TaskRow({
   const isShopping = item.category === 'shopping';
   const expandable = !!onToggleExpand;
   const [draftCheck, setDraftCheck] = useState('');
+  const [draftShop, setDraftShop] = useState('');
 
   function commitDraft() {
     const trimmed = draftCheck.trim();
     if (!trimmed || !onChecklistAdd) return;
     onChecklistAdd(trimmed);
     setDraftCheck('');
+  }
+
+  function commitShop() {
+    const trimmed = draftShop.trim();
+    if (!trimmed || !onShoppingAdd) return;
+    onShoppingAdd(trimmed);
+    setDraftShop('');
   }
 
   return (
@@ -4032,27 +4235,82 @@ function TaskRow({
       {expanded ? (
         <div className="border-t border-slate-100 px-3 py-3">
           {isShopping ? (() => {
-            const pool = (shoppingPool ?? []).filter((p) => !p.done);
-            if (pool.length === 0) {
-              return (
-                <div className="text-[12px] text-slate-400">Lista zakupów jest pusta.</div>
-              );
-            }
+            const pool = shoppingPool ?? [];
             return (
-              <ul className="space-y-1.5">
-                {pool.map((p) => (
-                  <li key={p.id} className="flex items-center gap-2">
+              <div className="space-y-2">
+                {pool.length === 0 ? (
+                  <div className="text-[12px] text-slate-400">Lista zakupów jest pusta.</div>
+                ) : (
+                  <ul className="space-y-1.5">
+                    {pool.map((p) => (
+                      <li key={p.id} className="flex items-center gap-2">
+                        <span
+                          className={`flex-1 text-[13px] ${
+                            p.done ? 'text-slate-400 line-through' : 'text-slate-700'
+                          }`}
+                        >
+                          {p.label}
+                        </span>
+                        <button
+                          type="button"
+                          onClick={() => onShoppingBought?.(p.id)}
+                          className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-full transition-colors ${
+                            p.done
+                              ? 'bg-emerald-500 text-white'
+                              : 'bg-emerald-50 text-emerald-500 hover:bg-emerald-100'
+                          }`}
+                          aria-label={p.done ? 'Cofnij kupione' : 'Kupione'}
+                          title={p.done ? 'Cofnij kupione' : 'Kupione'}
+                        >
+                          <Check className="h-3.5 w-3.5" />
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => onShoppingMoveToProjects?.(p.id)}
+                          className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-indigo-50 text-indigo-500 hover:bg-indigo-100"
+                          aria-label="Przenieś do Projektów"
+                          title="Przenieś do Projektów"
+                        >
+                          <ChevronRight className="h-3.5 w-3.5" />
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => onShoppingDelete?.(p.id)}
+                          className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-rose-50 text-rose-500 hover:bg-rose-100"
+                          aria-label="Usuń"
+                          title="Usuń"
+                        >
+                          <X className="h-3.5 w-3.5" />
+                        </button>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+
+                {onShoppingAdd ? (
+                  <div className="flex items-center gap-2 pt-1">
+                    <input
+                      value={draftShop}
+                      onChange={(e) => setDraftShop(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter') {
+                          e.preventDefault();
+                          commitShop();
+                        }
+                      }}
+                      className="flex-1 rounded-2xl border border-slate-200 px-3 py-1.5 text-[13px] outline-none"
+                      placeholder="Dodaj produkt..."
+                    />
                     <button
                       type="button"
-                      onClick={() => onShoppingToggle?.(p.id)}
-                      className="flex h-5 w-5 shrink-0 items-center justify-center rounded-md border-2 border-emerald-300 bg-white hover:bg-emerald-50"
-                      aria-label="Kupione"
-                      title="Kupione (usuwa z listy)"
-                    />
-                    <span className="text-[13px] text-slate-700">{p.label}</span>
-                  </li>
-                ))}
-              </ul>
+                      onClick={commitShop}
+                      className="rounded-full bg-indigo-50 px-3 py-1.5 text-[12px] font-semibold text-indigo-600"
+                    >
+                      +
+                    </button>
+                  </div>
+                ) : null}
+              </div>
             );
           })() : (
             <div className="space-y-2">
@@ -4144,7 +4402,7 @@ function InboxTasksScreen({
   const [newItem, setNewItem] = useState('');
 
   const today = todayKey();
-  const inbox = projectItems.filter((i) => !i.dueAt || i.dueAt === today);
+  const inbox = projectItems.filter((i) => i.dueAt === today);
 
   function toggleDone(id: string) {
     setProjectItems((prev) =>
@@ -4205,7 +4463,61 @@ function InboxTasksScreen({
     );
   }
 
-  function toggleShopping(poolId: string) {
+  function shoppingAdd(label: string) {
+    const trimmed = label.trim();
+    if (!trimmed) return;
+    setShoppingPool((prev) => {
+      const exists = prev.some(
+        (p) => p.label.toLowerCase() === trimmed.toLowerCase()
+      );
+      if (exists) return prev;
+      return [
+        ...prev,
+        {
+          id: `pool-${Date.now()}`,
+          label: trimmed,
+          done: false,
+          linkedEventIds: [],
+        },
+      ];
+    });
+  }
+
+  function shoppingMarkBought(poolId: string) {
+    setShoppingPool((prev) =>
+      prev.map((p) => (p.id === poolId ? { ...p, done: !p.done } : p))
+    );
+  }
+
+  function shoppingMoveToProjects(poolId: string) {
+    setShoppingPool((prev) => {
+      const target = prev.find((p) => p.id === poolId);
+      if (target) {
+        setProjectItems((items) => {
+          const exists = items.some(
+            (i) => i.label.toLowerCase() === target.label.toLowerCase()
+          );
+          if (exists) return items;
+          return [
+            ...items,
+            {
+              id: `project-${Date.now()}`,
+              label: target.label,
+              category: 'shopping',
+              done: false,
+              source: 'manual',
+              dueAt: null,
+              time: null,
+              checklist: [],
+            },
+          ];
+        });
+      }
+      return prev.filter((p) => p.id !== poolId);
+    });
+  }
+
+  function shoppingRemove(poolId: string) {
     setShoppingPool((prev) => prev.filter((p) => p.id !== poolId));
   }
 
@@ -4260,7 +4572,7 @@ function InboxTasksScreen({
 
       <div className="min-h-0 flex-1 overflow-y-auto pr-1 pb-6">
         <div className="mb-3 text-[13px] leading-5 text-slate-500">
-          Zadania na dziś i bez daty. Strzałka — przenieś na inny dzień. Ptaszek — zrobione. Krzyżyk — usuń.
+          Zadania zaplanowane na dziś. Strzałka — odeślij do Projektów. Ptaszek — zrobione. Krzyżyk — usuń.
         </div>
 
         {inbox.length === 0 ? (
@@ -4278,7 +4590,7 @@ function InboxTasksScreen({
                 key={item.id}
                 item={item}
                 onToggle={() => toggleDone(item.id)}
-                onPickDate={() => setPickingId(item.id)}
+                onPickDate={() => setDueAt(item.id, null, null)}
                 onDelete={() => removeItem(item.id)}
                 showCategory
                 expanded={expandedId === item.id}
@@ -4286,7 +4598,10 @@ function InboxTasksScreen({
                   setExpandedId((cur) => (cur === item.id ? null : item.id))
                 }
                 shoppingPool={shoppingPool}
-                onShoppingToggle={toggleShopping}
+                onShoppingAdd={shoppingAdd}
+                onShoppingBought={shoppingMarkBought}
+                onShoppingMoveToProjects={shoppingMoveToProjects}
+                onShoppingDelete={shoppingRemove}
                 onChecklistAdd={(label) => addChecklist(item.id, label)}
                 onChecklistToggle={(chkId) => toggleChecklist(item.id, chkId)}
                 onChecklistRemove={(chkId) => removeChecklist(item.id, chkId)}
@@ -4400,7 +4715,61 @@ function SevenDaysScreen({
     );
   }
 
-  function toggleShopping(poolId: string) {
+  function shoppingAdd(label: string) {
+    const trimmed = label.trim();
+    if (!trimmed) return;
+    setShoppingPool((prev) => {
+      const exists = prev.some(
+        (p) => p.label.toLowerCase() === trimmed.toLowerCase()
+      );
+      if (exists) return prev;
+      return [
+        ...prev,
+        {
+          id: `pool-${Date.now()}`,
+          label: trimmed,
+          done: false,
+          linkedEventIds: [],
+        },
+      ];
+    });
+  }
+
+  function shoppingMarkBought(poolId: string) {
+    setShoppingPool((prev) =>
+      prev.map((p) => (p.id === poolId ? { ...p, done: !p.done } : p))
+    );
+  }
+
+  function shoppingMoveToProjects(poolId: string) {
+    setShoppingPool((prev) => {
+      const target = prev.find((p) => p.id === poolId);
+      if (target) {
+        setProjectItems((items) => {
+          const exists = items.some(
+            (i) => i.label.toLowerCase() === target.label.toLowerCase()
+          );
+          if (exists) return items;
+          return [
+            ...items,
+            {
+              id: `project-${Date.now()}`,
+              label: target.label,
+              category: 'shopping',
+              done: false,
+              source: 'manual',
+              dueAt: null,
+              time: null,
+              checklist: [],
+            },
+          ];
+        });
+      }
+      return prev.filter((p) => p.id !== poolId);
+    });
+  }
+
+  function shoppingRemove(poolId: string) {
     setShoppingPool((prev) => prev.filter((p) => p.id !== poolId));
   }
 
@@ -4474,7 +4843,10 @@ function SevenDaysScreen({
                           setExpandedId((cur) => (cur === item.id ? null : item.id))
                         }
                         shoppingPool={shoppingPool}
-                        onShoppingToggle={toggleShopping}
+                        onShoppingAdd={shoppingAdd}
+                        onShoppingBought={shoppingMarkBought}
+                      onShoppingMoveToProjects={shoppingMoveToProjects}
+                      onShoppingDelete={shoppingRemove}
                         onChecklistAdd={(label) => addChecklist(item.id, label)}
                         onChecklistToggle={(chkId) => toggleChecklist(item.id, chkId)}
                         onChecklistRemove={(chkId) => removeChecklist(item.id, chkId)}
@@ -5074,6 +5446,34 @@ export default function App() {
     });
   }
 
+  function handleShoppingTaskDetected(payload: {
+    label: string;
+    dueAt: string | null;
+    time: string | null;
+  }) {
+    const trimmed = payload.label.trim();
+    if (!trimmed) return;
+    setProjectItems((prev) => {
+      const exists = prev.some(
+        (item) => item.label.toLowerCase() === trimmed.toLowerCase()
+      );
+      if (exists) return prev;
+      return [
+        ...prev,
+        {
+          id: `project-${Date.now()}`,
+          label: trimmed,
+          category: 'shopping',
+          done: false,
+          source: 'chat',
+          dueAt: payload.dueAt,
+          time: payload.time,
+          checklist: [],
+        },
+      ];
+    });
+  }
+
   const [settingsPath, setSettingsPath] = useState<SettingsPath>('root');
   const [showNotifications, setShowNotifications] = useState(false);
   const [homeDetail, setHomeDetail] = useState<HomeDetailView>(null);
@@ -5182,6 +5582,7 @@ export default function App() {
           <ChatScreen
             onShoppingDetected={handleShoppingDetected}
             onProjectDetected={handleProjectDetected}
+            onShoppingTaskDetected={handleShoppingTaskDetected}
             chatMessages={chatMessages}
             setChatMessages={setChatMessages}
           />
