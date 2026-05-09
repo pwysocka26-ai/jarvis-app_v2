@@ -64,10 +64,20 @@ import { FaMicrosoft } from 'react-icons/fa6';
 
 type TabId = 'home' | 'chat' | 'plan' | 'calendar' | 'projects' | 'settings';
 
+type ChatActionKind = 'set-due-today' | 'set-due-tomorrow' | 'set-due-pick';
+
+type ChatAction = {
+  id: string;
+  label: string;
+  kind: ChatActionKind;
+  taskId: string;
+};
+
 type ChatMessage = {
   id: string;
   role: 'user' | 'assistant' | 'system';
   text: string;
+  actions?: ChatAction[];
 };
 
 type CalendarChecklistItem = {
@@ -128,7 +138,7 @@ const copy = {
   meeting1: '1 spotkanie',
   todayLine3: ' o ',
   todayLine4: '11:00',
-  cardToday: 'Dzisiaj',
+  cardToday: 'Dziś',
   cardTodo: 'Do zrobienia',
   cardWeek: 'Ten tydzień',
   cardProjects: 'Projekty',
@@ -329,6 +339,18 @@ type NavContextType = {
 
 const NavContext = createContext<NavContextType | null>(null);
 
+type ProfileContextType = {
+  profile: UserProfile;
+  updateProfile: (p: UserProfile) => void;
+};
+
+const ProfileContext = createContext<ProfileContextType | null>(null);
+
+function useProfile(): UserProfile {
+  const ctx = useContext(ProfileContext);
+  return ctx ? ctx.profile : readProfile();
+}
+
 type HomeDetailView = null | 'inbox-tasks' | 'seven-days';
 
 const STORAGE_KEY = 'jarvis_calendar_v6_state';
@@ -379,6 +401,11 @@ function addDays(date: Date, days: number) {
 
 function todayKey(): string {
   return toDateKey(new Date());
+}
+
+function currentHHMM(): string {
+  const now = new Date();
+  return `${pad2(now.getHours())}:${pad2(now.getMinutes())}`;
 }
 
 function tomorrowKey(): string {
@@ -793,7 +820,7 @@ function HeaderBell() {
 
 function HeaderAvatar() {
   const nav = useContext(NavContext);
-  const profile = readProfile();
+  const profile = useProfile();
   const initials = getInitials(profile);
   return (
     <button
@@ -950,7 +977,7 @@ function HomeScreen({
   onOpenInbox: () => void;
   onOpenWeek: () => void;
 }) {
-  const profile = readProfile();
+  const profile = useProfile();
   const firstName = profile.firstName.trim() || DEFAULT_PROFILE.firstName;
 
   const [now, setNow] = useState<Date>(() => new Date());
@@ -1008,11 +1035,16 @@ function HomeScreen({
     }));
 
   const upcomingTaskItems: UpcomingItem[] = projectItems
-    .filter((i) => !i.done && i.dueAt === today && i.time && i.time >= nowTime)
+    .filter(
+      (i) =>
+        !i.done &&
+        i.dueAt === today &&
+        (!i.time || i.time >= nowTime)
+    )
     .map((i) => ({
       id: i.id,
       kind: 'task',
-      time: i.time as string,
+      time: i.time ?? '',
       title: i.label,
       note: null,
       dotClass: 'bg-indigo-400',
@@ -1021,7 +1053,12 @@ function HomeScreen({
     }));
 
   const upcomingToday = [...upcomingEventItems, ...upcomingTaskItems]
-    .sort((a, b) => a.time.localeCompare(b.time))
+    .sort((a, b) => {
+      if (!a.time && !b.time) return 0;
+      if (!a.time) return 1;
+      if (!b.time) return -1;
+      return a.time.localeCompare(b.time);
+    })
     .slice(0, 2);
   const nextItem = upcomingToday[0] ?? null;
 
@@ -1118,27 +1155,6 @@ function HomeScreen({
       </section>
 
       <section className="mb-2">
-        {nextItem ? (
-          <button
-            type="button"
-            onClick={onOpenInbox}
-            className="mb-3 flex w-full items-start gap-3 rounded-[18px] bg-[linear-gradient(135deg,#eef2ff_0%,#f5f3ff_100%)] p-3 text-left shadow-sm"
-          >
-            <div className="shrink-0 rounded-full bg-white/80 p-2">
-              <Bell className="h-4 w-4 text-indigo-500" />
-            </div>
-            <div className="min-w-0 flex-1">
-              <div className="text-[12px] font-semibold uppercase tracking-wide text-indigo-500">
-                Nadchodzące — {nextItem.time} {nextItem.title}
-              </div>
-              <div className="mt-0.5 text-[13px] leading-5 text-slate-700">
-                Masz {timeUntilLabel(nextItem.time, now)}
-                {nextItem.note ? `, pamiętaj o ${nextItem.note}` : ''}.
-              </div>
-            </div>
-          </button>
-        ) : null}
-
         <div className="mb-2 flex items-center gap-3">
           <Clock className="h-7 w-7 text-violet-400" />
           <h3 className="text-[18px] font-semibold text-slate-800">
@@ -1164,7 +1180,7 @@ function HomeScreen({
                 <div className="flex min-w-0 items-center gap-3">
                   <div className={`h-4 w-4 shrink-0 rounded-full ${it.dotClass}`} />
                   <div className="shrink-0 text-[15px] font-semibold text-slate-800">
-                    {it.time}
+                    {it.time || '—'}
                   </div>
                   <div className="truncate text-[15px] text-slate-700">{it.title}</div>
                 </div>
@@ -1235,16 +1251,19 @@ function ChatScreen({
   onShoppingDetected,
   onProjectDetected,
   onShoppingTaskDetected,
+  onChatAction,
   chatMessages,
   setChatMessages,
 }: {
   onShoppingDetected: (itemLabel: string) => void;
   onProjectDetected: (text: string) => void;
   onShoppingTaskDetected: (payload: {
+    id: string;
     label: string;
     dueAt: string | null;
     time: string | null;
   }) => void;
+  onChatAction: (action: ChatAction) => void;
   chatMessages: ChatMessage[];
   setChatMessages: React.Dispatch<React.SetStateAction<ChatMessage[]>>;
 }) {
@@ -1288,17 +1307,46 @@ function ChatScreen({
 
     const shoppingTask = extractShoppingTaskFromChat(trimmed);
     if (shoppingTask) {
-      onShoppingTaskDetected(shoppingTask);
+      const newTaskId = `project-${Date.now()}`;
+      onShoppingTaskDetected({ ...shoppingTask, id: newTaskId });
       const whenLabel =
         shoppingTask.dueAt
           ? formatDueWithTime(shoppingTask.dueAt, shoppingTask.time)
           : shoppingTask.time;
-      const ack = whenLabel
-        ? `Dodałem zadanie zakupowe: ${shoppingTask.label} (${whenLabel}). Rozwiń je w "Do zrobienia" — pokaże się Twoja lista zakupów.`
-        : `Dodałem zadanie zakupowe: ${shoppingTask.label}. Rozwiń je w "Do zrobienia" — pokaże się Twoja lista zakupów.`;
+
+      const needsDate = !shoppingTask.dueAt;
+      const ack = needsDate
+        ? `Dodałem zadanie zakupowe: ${shoppingTask.label}. Kiedy chcesz to zrobić?`
+        : whenLabel
+          ? `Dodałem zadanie zakupowe: ${shoppingTask.label} (${whenLabel}). Rozwiń je w "Do zrobienia" — pokaże się Twoja lista zakupów.`
+          : `Dodałem zadanie zakupowe: ${shoppingTask.label}.`;
+
+      const actions: ChatAction[] | undefined = needsDate
+        ? [
+            {
+              id: `act-today-${newTaskId}`,
+              label: 'Dziś',
+              kind: 'set-due-today',
+              taskId: newTaskId,
+            },
+            {
+              id: `act-tomorrow-${newTaskId}`,
+              label: 'Jutro',
+              kind: 'set-due-tomorrow',
+              taskId: newTaskId,
+            },
+            {
+              id: `act-pick-${newTaskId}`,
+              label: 'Wybierz datę',
+              kind: 'set-due-pick',
+              taskId: newTaskId,
+            },
+          ]
+        : undefined;
+
       setChatMessages((prev) => [
         ...prev,
-        { id: `local-${Date.now()}`, role: 'assistant', text: ack },
+        { id: `local-${Date.now()}`, role: 'assistant', text: ack, actions },
       ]);
       inputRef.current?.focus();
       return;
@@ -1382,19 +1430,36 @@ function ChatScreen({
     }
   }
 
+  function clearChat() {
+    if (chatMessages.length === 0) return;
+    if (!window.confirm('Wyczyścić całą historię rozmowy?')) return;
+    setChatMessages([]);
+  }
+
   return (
     <div className="flex h-full flex-col">
       <Header
         title="Chat"
         subtitle={copy.version}
         icon={<MessageCircle className="h-10 w-10 text-indigo-500" />}
+        extraRight={
+          <button
+            type="button"
+            onClick={clearChat}
+            className="flex h-10 w-10 items-center justify-center rounded-full bg-white/70 text-slate-500 hover:text-rose-500"
+            aria-label="Wyczyść historię"
+            title="Wyczyść historię rozmowy"
+          >
+            <Trash2 className="h-5 w-5" />
+          </button>
+        }
       />
 
       <div className="-mx-5 min-h-0 flex-1 bg-[linear-gradient(180deg,#edf1f9_0%,#ebedf5_100%)] px-5 py-5">
         <div className="flex h-full flex-col">
           <div className="min-h-0 flex-1 overflow-y-auto rounded-[30px] bg-transparent">
             {chatMessages.length === 0 ? (
-              <div className="flex h-full items-center justify-center px-8 text-center text-[16px] text-slate-400">
+              <div className="flex h-full items-center justify-center px-8 text-center text-[14px] text-slate-400">
                 Napisz pierwszą wiadomość do Jarvisa.
               </div>
             ) : (
@@ -1405,13 +1470,27 @@ function ChatScreen({
                     className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}
                   >
                     <div
-                      className={`max-w-[80%] rounded-[24px] px-4 py-3 text-[16px] leading-6 shadow-sm ${
+                      className={`max-w-[80%] ${
                         msg.role === 'user'
-                          ? 'rounded-br-[8px] bg-[linear-gradient(180deg,#7196ff_0%,#4f75ff_100%)] text-white'
-                          : 'rounded-bl-[8px] bg-white/85 text-slate-800'
+                          ? 'rounded-[24px] rounded-br-[8px] bg-[linear-gradient(180deg,#7196ff_0%,#4f75ff_100%)] px-4 py-2.5 text-[14px] text-white shadow-sm'
+                          : 'rounded-[24px] rounded-bl-[8px] bg-white/85 px-4 py-2.5 text-[14px] text-slate-800 shadow-sm'
                       }`}
                     >
-                      {msg.text}
+                      <div>{msg.text}</div>
+                      {msg.actions && msg.actions.length > 0 ? (
+                        <div className="mt-2 flex flex-wrap gap-2">
+                          {msg.actions.map((a) => (
+                            <button
+                              key={a.id}
+                              type="button"
+                              onClick={() => onChatAction(a)}
+                              className="rounded-full bg-indigo-50 px-3 py-1.5 text-[13px] font-semibold text-indigo-600 hover:bg-indigo-100"
+                            >
+                              {a.label}
+                            </button>
+                          ))}
+                        </div>
+                      ) : null}
                     </div>
                   </div>
                 ))}
@@ -1442,7 +1521,7 @@ function ChatScreen({
                   }
                 }}
                 placeholder="Napisz do Jarvisa..."
-                className="flex-1 bg-transparent text-[18px] text-slate-700 outline-none placeholder:text-slate-400"
+                className="flex-1 bg-transparent text-[14px] text-slate-700 outline-none placeholder:text-slate-400"
                 autoFocus
               />
               <button className="text-indigo-400" type="button">
@@ -2706,7 +2785,7 @@ function AccountScreen({
   onBack: () => void;
   onNavigate: (p: SettingsPath) => void;
 }) {
-  const [profile] = useState(() => readProfile());
+  const profile = useProfile();
   const [logoutHint, setLogoutHint] = useState('');
 
   const fullName =
@@ -2815,7 +2894,8 @@ function AccountScreen({
 }
 
 function ProfileScreen({ onBack }: { onBack: () => void }) {
-  const [p, setP] = useState<UserProfile>(() => readProfile());
+  const profileCtx = useContext(ProfileContext);
+  const [p, setP] = useState<UserProfile>(() => profileCtx?.profile ?? readProfile());
   const [hint, setHint] = useState('');
 
   function save() {
@@ -2824,7 +2904,11 @@ function ProfileScreen({ onBack }: { onBack: () => void }) {
       lastName: p.lastName.trim(),
       email: p.email.trim(),
     };
-    writeProfile(trimmed);
+    if (profileCtx) {
+      profileCtx.updateProfile(trimmed);
+    } else {
+      writeProfile(trimmed);
+    }
     setP(trimmed);
     setHint('Zapisano.');
     window.setTimeout(() => setHint(''), 2000);
@@ -3926,6 +4010,7 @@ function DatePickerPopup({
   const [viewYear, setViewYear] = useState(initial.getFullYear());
   const [viewMonth, setViewMonth] = useState(initial.getMonth());
   const [time, setTime] = useState<string>(valueTime ?? '');
+  const [error, setError] = useState<string>('');
 
   const firstDay = new Date(viewYear, viewMonth, 1);
   const jsWeekday = firstDay.getDay();
@@ -3945,6 +4030,10 @@ function DatePickerPopup({
 
   function commit(date: string | null) {
     const t = time.trim() || null;
+    if (date === todayKey() && t && t < currentHHMM()) {
+      setError('Ta godzina już minęła. Wybierz późniejszą lub zostaw puste.');
+      return;
+    }
     onChange(date, date ? t : null);
     onClose();
   }
@@ -3961,6 +4050,7 @@ function DatePickerPopup({
   const today = todayKey();
   const tomorrow = tomorrowKey();
   const endWeek = endOfWeekKey();
+  const isTodaySelected = value === today;
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
@@ -4014,18 +4104,25 @@ function DatePickerPopup({
           </button>
         </div>
 
-        <div className="mb-3 flex items-center gap-2">
+        <div className="mb-1 flex items-center gap-2">
           <label className="shrink-0 text-[13px] font-semibold text-slate-600">Godzina</label>
           <input
             type="time"
             value={time}
-            onChange={(e) => setTime(e.target.value)}
+            min={isTodaySelected ? currentHHMM() : undefined}
+            onChange={(e) => {
+              setTime(e.target.value);
+              setError('');
+            }}
             className="flex-1 rounded-[12px] border border-slate-200 px-3 py-2 text-[14px] outline-none"
           />
           {time ? (
             <button
               type="button"
-              onClick={() => setTime('')}
+              onClick={() => {
+                setTime('');
+                setError('');
+              }}
               className="rounded-[12px] bg-slate-100 px-3 py-2 text-[12px] font-semibold text-slate-500"
               title="Wyczyść godzinę"
             >
@@ -4033,6 +4130,11 @@ function DatePickerPopup({
             </button>
           ) : null}
         </div>
+        {error ? (
+          <div className="mb-3 text-[12px] font-medium text-rose-600">{error}</div>
+        ) : (
+          <div className="mb-3" />
+        )}
 
         <div className="mb-2 flex items-center justify-between">
           <button
@@ -4109,6 +4211,7 @@ function TaskRow({
   onChecklistAdd,
   onChecklistToggle,
   onChecklistRemove,
+  onEditDate,
 }: {
   item: ProjectItem;
   onToggle: () => void;
@@ -4125,6 +4228,7 @@ function TaskRow({
   onChecklistAdd?: (label: string) => void;
   onChecklistToggle?: (checklistId: string) => void;
   onChecklistRemove?: (checklistId: string) => void;
+  onEditDate?: () => void;
 }) {
   const categoryMeta: Record<ProjectCategory, { label: string; color: string }> = {
     shopping: { label: 'Zakupy', color: '#F59E0B' },
@@ -4177,14 +4281,36 @@ function TaskRow({
                 {showCategory ? (
                   <>
                     <div className="h-1.5 w-1.5 rounded-full" style={{ backgroundColor: meta.color }} />
-                    <span className="text-[11px] text-slate-500">
-                      {meta.label}
-                      {dueLabel ? ` · ${dueLabel}` : ''}
-                    </span>
+                    <span className="text-[11px] text-slate-500">{meta.label}</span>
                   </>
-                ) : (
-                  <span className="text-[11px] text-slate-500">{dueLabel}</span>
-                )}
+                ) : null}
+                {dueLabel ? (
+                  onEditDate ? (
+                    <span
+                      role="button"
+                      tabIndex={0}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        onEditDate();
+                      }}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter' || e.key === ' ') {
+                          e.preventDefault();
+                          e.stopPropagation();
+                          onEditDate();
+                        }
+                      }}
+                      className="rounded-full bg-indigo-50 px-2 py-0.5 text-[11px] font-medium text-indigo-600 hover:bg-indigo-100"
+                      title="Zmień datę / godzinę"
+                    >
+                      {showCategory ? `· ${dueLabel}` : dueLabel}
+                    </span>
+                  ) : (
+                    <span className="text-[11px] text-slate-500">
+                      {showCategory ? `· ${dueLabel}` : dueLabel}
+                    </span>
+                  )
+                ) : null}
               </div>
             ) : null}
           </div>
@@ -4196,6 +4322,18 @@ function TaskRow({
             )
           ) : null}
         </button>
+
+        {onEditDate ? (
+          <button
+            type="button"
+            onClick={onEditDate}
+            className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-amber-50 text-amber-600 hover:bg-amber-100"
+            aria-label="Zmień datę / godzinę"
+            title="Zmień datę / godzinę"
+          >
+            <Clock className="h-4 w-4" />
+          </button>
+        ) : null}
 
         <button
           type="button"
@@ -4400,6 +4538,8 @@ function InboxTasksScreen({
   const [pickingId, setPickingId] = useState<string | null>(null);
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [newItem, setNewItem] = useState('');
+  const [newTime, setNewTime] = useState('');
+  const [addError, setAddError] = useState('');
 
   const today = todayKey();
   const inbox = projectItems.filter((i) => i.dueAt === today);
@@ -4524,6 +4664,11 @@ function InboxTasksScreen({
   function addItem() {
     const trimmed = newItem.trim();
     if (!trimmed) return;
+    const t = newTime.trim() || null;
+    if (t && t < currentHHMM()) {
+      setAddError('Ta godzina już minęła. Wybierz późniejszą lub zostaw puste.');
+      return;
+    }
     setProjectItems((prev) => [
       ...prev,
       {
@@ -4532,19 +4677,21 @@ function InboxTasksScreen({
         category: extractProjectCategoryFromChat(trimmed),
         done: false,
         source: 'manual',
-        dueAt: null,
-        time: null,
+        dueAt: today,
+        time: t,
         checklist: [],
       },
     ]);
     setNewItem('');
+    setNewTime('');
+    setAddError('');
   }
 
   const picking = inbox.find((i) => i.id === pickingId) || null;
 
   return (
     <div className="flex h-full flex-col">
-      <SubHeader title="Do zrobienia" onBack={onBack} />
+      <SubHeader title="Dziś" onBack={onBack} />
 
       <div className="mb-3 rounded-[18px] bg-white/75 p-3 shadow-sm">
         <div className="flex items-center gap-2">
@@ -4560,6 +4707,17 @@ function InboxTasksScreen({
             className="flex-1 rounded-2xl border border-slate-200 px-4 py-2.5 text-[14px] outline-none"
             placeholder="Nowe zadanie..."
           />
+          <input
+            type="time"
+            value={newTime}
+            min={currentHHMM()}
+            onChange={(e) => {
+              setNewTime(e.target.value);
+              setAddError('');
+            }}
+            className="w-[100px] rounded-2xl border border-slate-200 px-2 py-2.5 text-[13px] outline-none"
+            title="Godzina (opcjonalnie)"
+          />
           <button
             type="button"
             onClick={addItem}
@@ -4568,6 +4726,9 @@ function InboxTasksScreen({
             Dodaj
           </button>
         </div>
+        {addError ? (
+          <div className="mt-2 text-[12px] font-medium text-rose-600">{addError}</div>
+        ) : null}
       </div>
 
       <div className="min-h-0 flex-1 overflow-y-auto pr-1 pb-6">
@@ -4597,6 +4758,7 @@ function InboxTasksScreen({
                 onToggleExpand={() =>
                   setExpandedId((cur) => (cur === item.id ? null : item.id))
                 }
+                onEditDate={() => setPickingId(item.id)}
                 shoppingPool={shoppingPool}
                 onShoppingAdd={shoppingAdd}
                 onShoppingBought={shoppingMarkBought}
@@ -5447,6 +5609,7 @@ export default function App() {
   }
 
   function handleShoppingTaskDetected(payload: {
+    id: string;
     label: string;
     dueAt: string | null;
     time: string | null;
@@ -5461,7 +5624,7 @@ export default function App() {
       return [
         ...prev,
         {
-          id: `project-${Date.now()}`,
+          id: payload.id,
           label: trimmed,
           category: 'shopping',
           done: false,
@@ -5474,17 +5637,111 @@ export default function App() {
     });
   }
 
+  function handleChatAction(action: ChatAction) {
+    if (action.kind === 'set-due-today' || action.kind === 'set-due-tomorrow') {
+      const next = action.kind === 'set-due-today' ? todayKey() : tomorrowKey();
+      const target = projectItems.find((i) => i.id === action.taskId);
+      const taskLabel = target?.label ?? 'zadanie';
+      setProjectItems((prev) =>
+        prev.map((i) => (i.id === action.taskId ? { ...i, dueAt: next } : i))
+      );
+      clearActionsForTask(action.taskId);
+      const whenLabel = formatDueLabel(next);
+      setChatMessages((prev) => [
+        ...prev,
+        {
+          id: `local-${Date.now()}`,
+          role: 'assistant',
+          text: `OK, "${taskLabel}" zaplanowane na ${whenLabel}.`,
+        },
+      ]);
+    } else if (action.kind === 'set-due-pick') {
+      setChatPickingTaskId(action.taskId);
+    }
+  }
+
+  function clearActionsForTask(taskId: string) {
+    setChatMessages((prev) =>
+      prev.map((m) =>
+        m.actions?.some((a) => a.taskId === taskId)
+          ? { ...m, actions: undefined }
+          : m
+      )
+    );
+  }
+
   const [settingsPath, setSettingsPath] = useState<SettingsPath>('root');
   const [showNotifications, setShowNotifications] = useState(false);
   const [homeDetail, setHomeDetail] = useState<HomeDetailView>(null);
+  const [chatPickingTaskId, setChatPickingTaskId] = useState<string | null>(null);
   const [readIds, setReadIds] = useState<string[]>(() => readIdList(NOTIFICATIONS_READ_KEY));
   const [dismissedIds, setDismissedIds] = useState<string[]>(() =>
     readIdList(NOTIFICATIONS_DISMISSED_KEY)
   );
+  const [profile, setProfile] = useState<UserProfile>(() => readProfile());
+  const updateProfile = (next: UserProfile) => {
+    setProfile(next);
+    writeProfile(next);
+  };
+  const profileValue: ProfileContextType = { profile, updateProfile };
+
+  const [notifNow, setNotifNow] = useState<Date>(() => new Date());
+  useEffect(() => {
+    const id = window.setInterval(() => setNotifNow(new Date()), 60_000);
+    return () => window.clearInterval(id);
+  }, []);
+
+  const dynamicNotifications = useMemo<AppNotification[]>(() => {
+    const today = todayKey();
+    const nowTime = nowHHMM(notifNow);
+    function diffMin(eventTime: string): number {
+      const [eh, em] = eventTime.split(':').map(Number);
+      const [nh, nm] = nowTime.split(':').map(Number);
+      return eh * 60 + em - (nh * 60 + nm);
+    }
+    function statusLine(eventTime: string): string {
+      const d = diffMin(eventTime);
+      if (d < -5 && d >= -120) return `minęło ${Math.abs(d)} min temu`;
+      if (d <= 0) return 'teraz';
+      if (d < 60) return `za ${d} min`;
+      const h = Math.floor(d / 60);
+      const m = d % 60;
+      return m === 0 ? `za ${h} h` : `za ${h} h ${m} min`;
+    }
+    const items: AppNotification[] = [];
+    events
+      .filter((e) => e.date === today && e.time)
+      .forEach((e) => {
+        const d = diffMin(e.time);
+        if (d < -120 || d > 20) return;
+        items.push({
+          id: `evt-${e.id}`,
+          kind: 'reminder',
+          title: e.title,
+          body: `${e.time} • ${statusLine(e.time)}`,
+          time: e.time,
+        });
+      });
+    projectItems
+      .filter((i) => !i.done && i.dueAt === today && i.time)
+      .forEach((i) => {
+        const t = i.time as string;
+        const d = diffMin(t);
+        if (d < -120 || d > 20) return;
+        items.push({
+          id: `task-${i.id}`,
+          kind: 'task',
+          title: i.label,
+          body: `${t} • ${statusLine(t)}`,
+          time: t,
+        });
+      });
+    return items.sort((a, b) => a.time.localeCompare(b.time));
+  }, [events, projectItems, notifNow]);
 
   const visibleNotifications = useMemo(
-    () => MOCK_NOTIFICATIONS.filter((n) => !dismissedIds.includes(n.id)),
-    [dismissedIds]
+    () => dynamicNotifications.filter((n) => !dismissedIds.includes(n.id)),
+    [dynamicNotifications, dismissedIds]
   );
 
   const unreadCount = useMemo(
@@ -5502,7 +5759,7 @@ export default function App() {
   }
 
   function markAllRead() {
-    const allIds = MOCK_NOTIFICATIONS.map((n) => n.id);
+    const allIds = dynamicNotifications.map((n) => n.id);
     setReadIds(allIds);
     writeIdList(NOTIFICATIONS_READ_KEY, allIds);
   }
@@ -5517,7 +5774,7 @@ export default function App() {
   }
 
   function clearAllNotifications() {
-    const allIds = MOCK_NOTIFICATIONS.map((n) => n.id);
+    const allIds = dynamicNotifications.map((n) => n.id);
     setDismissedIds(allIds);
     writeIdList(NOTIFICATIONS_DISMISSED_KEY, allIds);
   }
@@ -5583,6 +5840,7 @@ export default function App() {
             onShoppingDetected={handleShoppingDetected}
             onProjectDetected={handleProjectDetected}
             onShoppingTaskDetected={handleShoppingTaskDetected}
+            onChatAction={handleChatAction}
             chatMessages={chatMessages}
             setChatMessages={setChatMessages}
           />
@@ -5629,12 +5887,43 @@ export default function App() {
     }
   }
 
+  const chatPickingItem = chatPickingTaskId
+    ? projectItems.find((i) => i.id === chatPickingTaskId) ?? null
+    : null;
+
   return (
+    <ProfileContext.Provider value={profileValue}>
     <NavContext.Provider value={navValue}>
       <PhoneShell activeTab={activeTab} setActiveTab={goToTab}>
         {screen}
       </PhoneShell>
+      {chatPickingTaskId ? (
+        <DatePickerPopup
+          value={chatPickingItem?.dueAt ?? null}
+          valueTime={chatPickingItem?.time ?? null}
+          onChange={(d, t) => {
+            const tid = chatPickingTaskId;
+            const target = projectItems.find((i) => i.id === tid);
+            const taskLabel = target?.label ?? 'zadanie';
+            setProjectItems((prev) =>
+              prev.map((i) => (i.id === tid ? { ...i, dueAt: d, time: t } : i))
+            );
+            clearActionsForTask(tid);
+            setChatPickingTaskId(null);
+            const whenLabel = formatDueWithTime(d, t);
+            const ack = whenLabel
+              ? `OK, "${taskLabel}" zaplanowane na ${whenLabel}.`
+              : `OK, usunąłem datę z "${taskLabel}" — zostaje w Projektach.`;
+            setChatMessages((prev) => [
+              ...prev,
+              { id: `local-${Date.now()}`, role: 'assistant', text: ack },
+            ]);
+          }}
+          onClose={() => setChatPickingTaskId(null)}
+        />
+      ) : null}
     </NavContext.Provider>
+    </ProfileContext.Provider>
   );
 }
 
