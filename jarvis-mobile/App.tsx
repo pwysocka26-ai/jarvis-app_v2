@@ -187,11 +187,11 @@ export default function App() {
     );
   }
 
-  const homeShortcuts = [
-    { key: "chat", label: "Otwórz Chat", desc: "Rozmowa i voice" },
-    { key: "plan", label: "Plan dnia", desc: "Najbliższe zadania" },
-    { key: "calendar", label: "Kalendarz", desc: "Daty i terminy" },
-    { key: "inbox", label: "Inbox", desc: "Rzeczy bez terminu" },
+  const homeTiles = [
+    { key: "today", label: "Dzisiaj", target: "plan" as TabKey },
+    { key: "todo", label: "Do zrobienia", target: "plan" as TabKey },
+    { key: "week", label: "Ten tydzień", target: "calendar" as TabKey },
+    { key: "projects", label: "Projekty", target: "plan" as TabKey },
   ] as const;
 
   return (
@@ -232,17 +232,36 @@ export default function App() {
               </View>
             </View>
 
-            <View style={styles.homePanel}>
+            <TouchableOpacity style={styles.homePanel} onPress={() => setTab("plan")}>
               <Text style={styles.homePanelTitle}>Dzisiaj</Text>
               <Text style={styles.homePanelText}>Najbliższe zadanie: 09:00 — Sprawdzić plan dnia</Text>
               <Text style={styles.homePanelText}>Najwygodniej pracować przez Chat i Voice.</Text>
-            </View>
+            </TouchableOpacity>
 
             <View style={styles.homeShortcuts}>
-              {homeShortcuts.map((item) => (
-                <TouchableOpacity key={item.key} style={styles.shortcutCard} onPress={() => setTab(item.key as TabKey)}>
+              {homeTiles.map((item) => (
+                <TouchableOpacity
+                  key={item.key}
+                  style={styles.shortcutCard}
+                  onPress={() => setTab(item.target)}
+                >
                   <Text style={styles.shortcutTitle}>{item.label}</Text>
-                  <Text style={styles.shortcutText}>{item.desc}</Text>
+                  <Text style={styles.shortcutText}>Przejdź do sekcji</Text>
+                </TouchableOpacity>
+              ))}
+            </View>
+
+            <View style={styles.homeSectionHeader}>
+              <Text style={styles.sectionTitle}>Nadchodzące</Text>
+              <TouchableOpacity onPress={() => setTab("plan")}>
+                <Text style={styles.linkText}>Zobacz wszystko</Text>
+              </TouchableOpacity>
+            </View>
+
+            <View style={styles.inboxCard}>
+              {calendarTasks.slice(0, 2).map((item) => (
+                <TouchableOpacity key={item.id} style={styles.inboxRow} onPress={() => setTab("plan")}>
+                  <Text style={styles.inboxText}>{item.time ? `${item.time} — ` : ""}{item.title}</Text>
                 </TouchableOpacity>
               ))}
             </View>
@@ -493,6 +512,8 @@ const styles = StyleSheet.create({
 
   sectionTitle: { color: "#ffffff", fontSize: 18, fontWeight: "800" },
   helpText: { color: "#b7c4df", fontSize: 16, lineHeight: 24 },
+  linkText: { color: "#7db1ff", fontSize: 14, fontWeight: "700" },
+  homeSectionHeader: { flexDirection: "row", justifyContent: "space-between", alignItems: "center" },
 
   homeSummary: { flexDirection: "row", gap: 10 },
   metricCard: {
